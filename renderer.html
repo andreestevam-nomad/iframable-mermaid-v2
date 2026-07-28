@@ -57,10 +57,9 @@
         width: 100%;
       }
       html.mode-expand #root {
-        width: max-content;
-        min-width: 100%;
+        width: auto;
         box-sizing: border-box;
-        padding: 0.75rem;
+        padding: 0;
       }
       #root svg {
         max-width: 100%;
@@ -70,9 +69,8 @@
         margin: 0 auto;
       }
       html.mode-expand #root svg {
-        max-width: none;
-        width: auto;
-        height: auto;
+        max-width: none !important;
+        display: block;
       }
       .hint {
         margin: 2rem 0;
@@ -182,9 +180,10 @@
       let chain = Promise.resolve();
       let expandMode = false;
 
-      const MIN_SCALE = 0.25;
-      const MAX_SCALE = 4;
+      const MIN_SCALE = 0.05;
+      const MAX_SCALE = 8;
       const ZOOM_STEP = 1.2;
+      const FIT_PADDING = 32;
       let scale = 1;
       let tx = 0;
       let ty = 0;
@@ -222,11 +221,64 @@
         zoomLevelEl.textContent = `${Math.round(scale * 100)}%`;
       }
 
-      function resetView() {
-        scale = 1;
-        tx = 0;
-        ty = 0;
+      function readSvgSize(svg) {
+        const vb = svg.viewBox?.baseVal;
+        if (vb && vb.width > 0 && vb.height > 0) {
+          return { width: vb.width, height: vb.height };
+        }
+        const wAttr = svg.getAttribute("width");
+        const hAttr = svg.getAttribute("height");
+        const width = wAttr && !String(wAttr).endsWith("%") ? parseFloat(wAttr) : NaN;
+        const height = hAttr && !String(hAttr).endsWith("%") ? parseFloat(hAttr) : NaN;
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+          return { width, height };
+        }
+        try {
+          const box = svg.getBBox();
+          if (box.width > 0 && box.height > 0) {
+            return { width: box.width, height: box.height };
+          }
+        } catch {
+          /* SVG ainda não layoutado */
+        }
+        return { width: 0, height: 0 };
+      }
+
+      function fitToViewport() {
+        if (!expandMode) {
+          applyTransform();
+          return;
+        }
+        const svg = root.querySelector("svg");
+        if (!svg) {
+          scale = 1;
+          tx = 0;
+          ty = 0;
+          applyTransform();
+          return;
+        }
+        const { width, height } = readSvgSize(svg);
+        const vw = viewport.clientWidth;
+        const vh = viewport.clientHeight;
+        if (!(width > 0 && height > 0 && vw > 0 && vh > 0)) {
+          scale = 1;
+          tx = 0;
+          ty = 0;
+          applyTransform();
+          return;
+        }
+        const fit = Math.min(
+          (vw - FIT_PADDING) / width,
+          (vh - FIT_PADDING) / height,
+        );
+        scale = clampScale(fit > 0 ? fit : 1);
+        tx = (vw - width * scale) / 2;
+        ty = (vh - height * scale) / 2;
         applyTransform();
+      }
+
+      function resetView() {
+        fitToViewport();
       }
 
       function zoomAt(nextScale, clientX, clientY) {
@@ -258,8 +310,11 @@
         if (!expandMode) {
           panPointerId = null;
           viewport.classList.remove("is-panning");
+          scale = 1;
+          tx = 0;
+          ty = 0;
+          applyTransform();
         }
-        resetView();
       }
 
       function measureHeight() {
@@ -295,18 +350,18 @@
         }
       }
 
-      /** No expand, força tamanho intrínseco do SVG para zoom/pan úteis. */
+      /** No expand, força tamanho em px (evita colapso width:% dentro do viewport). */
       function prepareExpandSvg() {
         if (!expandMode) return;
         const svg = root.querySelector("svg");
         if (!svg) return;
+        const { width, height } = readSvgSize(svg);
         svg.style.maxWidth = "none";
-        svg.style.width = "auto";
-        svg.style.height = "auto";
-        const vb = svg.viewBox?.baseVal;
-        if (vb && vb.width > 0 && vb.height > 0) {
-          svg.setAttribute("width", String(vb.width));
-          svg.setAttribute("height", String(vb.height));
+        if (width > 0 && height > 0) {
+          svg.setAttribute("width", String(width));
+          svg.setAttribute("height", String(height));
+          svg.style.width = `${width}px`;
+          svg.style.height = `${height}px`;
         }
       }
 
@@ -362,6 +417,9 @@
           prepareExpandSvg();
           clearMermaidArtifacts();
           await waitForLayout();
+          // Parent pode ainda estar ajustando a altura do iframe; espera um frame a mais.
+          await waitForLayout();
+          fitToViewport();
           const height = measureHeight();
           console.log("[renderer] layout", { requestId, height, ms: Math.round(performance.now() - t0) });
           post({
@@ -462,6 +520,11 @@
 
         if (data.type === "ping") {
           post({ type: "renderer-ready" });
+          return;
+        }
+
+        if (data.type === "fit-view") {
+          void waitForLayout().then(() => fitToViewport());
           return;
         }
 

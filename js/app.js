@@ -301,13 +301,12 @@ function failPendingFor(iframe, reason) {
 }
 
 function applyOutputHeight() {
-  // Viewport fixo para zoom/pan; o SVG não define mais a altura do iframe.
+  // Viewport ≥ 100% da altura da página para zoom/pan.
   if (document.fullscreenElement === els.fullscreenTarget) {
     els.outputFrame.style.height = "100%";
     return;
   }
-  const vh = Math.round(window.innerHeight * 0.7);
-  els.outputFrame.style.height = `${Math.max(320, vh)}px`;
+  els.outputFrame.style.height = `${Math.max(window.innerHeight, 320)}px`;
 }
 
 async function renderInFrame(iframe, code, { expand = false } = {}) {
@@ -407,6 +406,14 @@ function onRendererMessage(event) {
 
   if (entry.expand || data.expand) {
     applyOutputHeight();
+    // Re-encaixa o diagrama após o iframe ganhar altura real (≥100vh).
+    requestAnimationFrame(() => {
+      try {
+        postToRenderer(els.outputFrame, { type: "fit-view" });
+      } catch {
+        /* iframe indisponível */
+      }
+    });
   }
 
   if (data.ok) {
@@ -754,7 +761,11 @@ function scheduleLayoutRefresh() {
   resizeTimer = setTimeout(() => {
     if (!views.output.hidden) {
       applyOutputHeight();
-      remeasureOutputFrame();
+      try {
+        postToRenderer(els.outputFrame, { type: "fit-view" });
+      } catch {
+        /* iframe indisponível */
+      }
       return;
     }
     refreshPreviewOnResize();
