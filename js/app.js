@@ -49,6 +49,7 @@ const els = {
   outputSource: document.getElementById("output-source"),
   outputSourceCode: document.getElementById("output-source-code"),
   btnCopySource: document.getElementById("btn-copy-source"),
+  btnZoomMode: document.getElementById("btn-zoom-mode"),
   btnFullscreen: document.getElementById("btn-fullscreen"),
   btnEdit: document.getElementById("btn-edit"),
   btnOpenOutput: document.getElementById("btn-open-output"),
@@ -72,7 +73,10 @@ let editorEpoch = 0;
 let previewEpoch = -1;
 let lastPreviewCode = null;
 let lastOutputCode = null;
+let lastOutputContentHeight = 280;
 let resizeTimer = null;
+/** Modo zoom/pan na view compartilhada (ligado por padrão). */
+let zoomModeEnabled = true;
 
 /** @type {WeakMap<HTMLIFrameElement, Promise<void>>} */
 const readyMap = new WeakMap();
@@ -300,13 +304,56 @@ function failPendingFor(iframe, reason) {
   }
 }
 
-function applyOutputHeight() {
-  // Viewport ≥ 100% da altura da página para zoom/pan.
+function syncZoomModeUi() {
+  document.body.dataset.zoom = zoomModeEnabled ? "on" : "off";
+  if (!els.btnZoomMode) return;
+  els.btnZoomMode.setAttribute("aria-pressed", zoomModeEnabled ? "true" : "false");
+  els.btnZoomMode.textContent = zoomModeEnabled
+    ? "Modo zoom: ligado"
+    : "Modo zoom: desligado";
+  els.btnZoomMode.classList.toggle("primary", zoomModeEnabled);
+}
+
+function applyOutputHeight(contentHeight) {
   if (document.fullscreenElement === els.fullscreenTarget) {
     els.outputFrame.style.height = "100%";
     return;
   }
-  els.outputFrame.style.height = `${Math.max(window.innerHeight, 320)}px`;
+  if (zoomModeEnabled) {
+    els.outputFrame.style.height = `${Math.max(window.innerHeight, 320)}px`;
+    return;
+  }
+  const safe = Math.max(120, Math.ceil(Number(contentHeight) || lastOutputContentHeight || 120));
+  lastOutputContentHeight = safe;
+  els.outputFrame.style.height = `${safe}px`;
+}
+
+function requestOutputFit() {
+  if (!zoomModeEnabled) return;
+  try {
+    postToRenderer(els.outputFrame, { type: "fit-view" });
+  } catch {
+    /* iframe indisponível */
+  }
+}
+
+async function setZoomMode(enabled) {
+  zoomModeEnabled = Boolean(enabled);
+  syncZoomModeUi();
+  applyOutputHeight(lastOutputContentHeight);
+  try {
+    await ensureRenderer(els.outputFrame);
+    postToRenderer(els.outputFrame, {
+      type: "set-zoom-mode",
+      enabled: zoomModeEnabled,
+    });
+  } catch (error) {
+    setStatus(error?.message || String(error), "error");
+  }
+}
+
+function toggleZoomMode() {
+  void setZoomMode(!zoomModeEnabled);
 }
 
 async function renderInFrame(iframe, code, { expand = false } = {}) {
@@ -380,6 +427,18 @@ function onRendererMessage(event) {
   const data = event.data;
   if (!data) return;
 
+  if (data.type === "zoom-mode-changed") {
+    if (event.source !== els.outputFrame?.contentWindow) return;
+    if (typeof data.height === "number") {
+      lastOutputContentHeight = Math.max(120, Math.ceil(data.height));
+    }
+    applyOutputHeight(data.height);
+    if (zoomModeEnabled) {
+      requestAnimationFrame(() => requestOutputFit());
+    }
+    return;
+  }
+
   if (data.type === "parse-result") {
     const entry = pending.get(data.requestId);
     if (!entry || entry.kind !== "parse") return;
@@ -404,16 +463,14 @@ function onRendererMessage(event) {
     return;
   }
 
-  if (entry.expand || data.expand) {
-    applyOutputHeight();
-    // Re-encaixa o diagrama após o iframe ganhar altura real (≥100vh).
-    requestAnimationFrame(() => {
-      try {
-        postToRenderer(els.outputFrame, { type: "fit-view" });
-      } catch {
-        /* iframe indisponível */
-      }
-    });
+  if (entry.iframe === els.outputFrame) {
+    if (typeof data.height === "number" && !zoomModeEnabled) {
+      lastOutputContentHeight = Math.max(120, Math.ceil(data.height));
+    }
+    applyOutputHeight(data.height);
+    if (zoomModeEnabled) {
+      requestAnimationFrame(() => requestOutputFit());
+    }
   }
 
   if (data.ok) {
@@ -740,7 +797,7 @@ function remeasureOutputFrame() {
     reject: () => {},
     iframe: els.outputFrame,
     timer: window.setTimeout(() => pending.delete(requestId), 5000),
-    expand: true,
+    expand: zoomModeEnabled,
     kind: "render",
   });
   try {
@@ -760,11 +817,11 @@ function scheduleLayoutRefresh() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (!views.output.hidden) {
-      applyOutputHeight();
-      try {
-        postToRenderer(els.outputFrame, { type: "fit-view" });
-      } catch {
-        /* iframe indisponível */
+      applyOutputHeight(lastOutputContentHeight);
+      if (zoomModeEnabled) {
+        requestOutputFit();
+      } else {
+        remeasureOutputFrame();
       }
       return;
     }
@@ -807,6 +864,8 @@ async function copyOutputSource() {
 
 async function bootOutput(param, title = "") {
   showView("output");
+  syncZoomModeUi();
+  applyOutputHeight(lastOutputContentHeight);
   setStatus("Carregando diagrama…", "muted");
   els.outputError.hidden = true;
   els.outputError.textContent = "";
@@ -817,7 +876,7 @@ async function bootOutput(param, title = "") {
     const code = await decompressFromParam(param);
     lastOutputCode = code;
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await renderInFrame(els.outputFrame, code, { expand: true });
+    await renderInFrame(els.outputFrame, code, { expand: zoomModeEnabled });
     showOutputSource(code);
     setStatus("", "muted");
 
@@ -828,6 +887,11 @@ async function bootOutput(param, title = "") {
     els.btnFullscreen.onclick = () => {
       void enterFullscreen();
     };
+    if (els.btnZoomMode) {
+      els.btnZoomMode.onclick = () => {
+        toggleZoomMode();
+      };
+    }
     if (els.btnCopySource) {
       els.btnCopySource.onclick = () => {
         void copyOutputSource();

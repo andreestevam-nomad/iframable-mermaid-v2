@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./css/styles.css?v=20260728n" />
+    <link rel="stylesheet" href="./css/styles.css?v=20260728o" />
     <script type="importmap">
       {
         "imports": {
@@ -199,15 +199,22 @@
           <pre id="output-source-code" class="output-source-code"></pre>
         </section>
         <div class="output-actions">
-          <button type="button" class="primary" id="btn-fullscreen">
-            Ver em tela cheia
+          <button
+            type="button"
+            class="primary"
+            id="btn-zoom-mode"
+            aria-pressed="true"
+            title="Ativa ou desativa zoom, pan e viewport em tela cheia"
+          >
+            Modo zoom: ligado
           </button>
+          <button type="button" id="btn-fullscreen">Ver em tela cheia</button>
           <button type="button" id="btn-edit">Editar</button>
           <button type="button" id="btn-open-output">Abrir em nova guia</button>
         </div>
       </div>
     </main>
 
-    <script type="module" src="./js/app.js?v=20260728n"></script>
+    <script type="module" src="./js/app.js?v=20260728o"></script>
   </body>
 </html>

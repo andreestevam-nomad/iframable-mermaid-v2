@@ -365,6 +365,37 @@
         }
       }
 
+      /** Volta ao layout fluido (scroll) ao desligar o modo zoom. */
+      function restoreScrollSvg() {
+        const svg = root.querySelector("svg");
+        if (!svg) return;
+        const { width, height } = readSvgSize(svg);
+        if (width > 0 && height > 0) {
+          svg.setAttribute("width", String(width));
+          svg.setAttribute("height", String(height));
+        }
+        svg.style.maxWidth = "100%";
+        svg.style.width = "100%";
+        svg.style.height = "auto";
+      }
+
+      async function applyZoomMode(enabled) {
+        setMode(Boolean(enabled));
+        if (expandMode) {
+          prepareExpandSvg();
+          await waitForLayout();
+          fitToViewport();
+        } else {
+          restoreScrollSvg();
+          await waitForLayout();
+        }
+        post({
+          type: "zoom-mode-changed",
+          zoom: expandMode,
+          height: measureHeight(),
+        });
+      }
+
       async function renderDiagram(rawCode, requestId, expand) {
         const t0 = performance.now();
         const code = prepareMermaidCode(rawCode);
@@ -525,6 +556,11 @@
 
         if (data.type === "fit-view") {
           void waitForLayout().then(() => fitToViewport());
+          return;
+        }
+
+        if (data.type === "set-zoom-mode") {
+          void applyZoomMode(Boolean(data.enabled));
           return;
         }
 
