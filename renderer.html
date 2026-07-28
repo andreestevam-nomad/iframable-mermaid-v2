@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mermaid Renderer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        background: #fff;
+      }
+      html.mode-scroll,
+      html.mode-scroll body {
+        height: 100%;
+        overflow: auto;
+      }
+      html.mode-expand,
+      html.mode-expand body {
+        height: auto;
+        overflow: hidden;
+      }
+      body {
+        padding: 0.5rem;
+        box-sizing: border-box;
+      }
+      #root {
+        width: 100%;
+      }
+      #root svg {
+        max-width: 100%;
+        width: 100%;
+        height: auto;
+        display: block;
+        margin: 0 auto;
+      }
+      .hint {
+        margin: 2rem 0;
+        text-align: center;
+        color: #5c6b7a;
+        font: 14px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+      .error {
+        margin: 0.5rem;
+        padding: 0.75rem 0.9rem;
+        border: 1px solid #e2b4b4;
+        background: #fff5f5;
+        color: #a32020;
+        border-radius: 6px;
+        font: 14px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"><p class="hint">O preview aparece aqui.</p></div>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.6.0/+esm";
+
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "neutral",
+        flowchart: {
+          // true: interpreta \n e <br/> nos rótulos (false mostrava "\n" literal).
+          htmlLabels: true,
+          useMaxWidth: true,
+          nodeSpacing: 25,
+          rankSpacing: 35,
+          padding: 12,
+        },
+      });
+
+      const root = document.getElementById("root");
+      let renderCount = 0;
+      let latestRequestId = 0;
+      let chain = Promise.resolve();
+      let expandMode = false;
+
+      /**
+       * Mermaid 11 não quebra linha com a sequência literal "\\n" nos rótulos.
+       * Converte para <br/> (exige flowchart.htmlLabels: true).
+       */
+      function prepareMermaidCode(code) {
+        if (!code) return code;
+        return String(code).replace(/\\n/g, "<br/>");
+      }
+
+      function post(payload) {
+        // Sandbox sem allow-same-origin → origin opaco ("null"); "*" é necessário.
+        parent.postMessage(payload, "*");
+      }
+
+      function setMode(expand) {
+        expandMode = Boolean(expand);
+        document.documentElement.classList.toggle("mode-expand", expandMode);
+        document.documentElement.classList.toggle("mode-scroll", !expandMode);
+      }
+
+      function measureHeight() {
+        const svg = root.querySelector("svg");
+        if (svg) {
+          const rect = svg.getBoundingClientRect();
+          return Math.max(120, Math.ceil(rect.height + 16));
+        }
+        return Math.max(
+          120,
+          Math.ceil(
+            Math.max(root.scrollHeight, document.body.scrollHeight) + 8,
+          ),
+        );
+      }
+
+      async function waitForLayout() {
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+      }
+
+      function clearMermaidArtifacts() {
+        for (const node of [...document.body.children]) {
+          if (node === root) continue;
+          if (node.tagName === "SVG" || node.getAttribute("aria-hidden") === "true") {
+            node.remove();
+          }
+        }
+      }
+
+      async function renderDiagram(rawCode, requestId, expand) {
+        const t0 = performance.now();
+        const code = prepareMermaidCode(rawCode);
+        console.log("[renderer] start", { requestId, chars: code?.length || 0, expand });
+
+        if (requestId !== latestRequestId) {
+          post({ type: "render-result", requestId, ok: true, skipped: true });
+          return;
+        }
+
+        setMode(expand);
+        renderCount += 1;
+        const id = `r-${requestId}-${renderCount}`;
+        root.replaceChildren();
+
+        if (!code || !code.trim()) {
+          root.innerHTML = '<p class="hint">O preview aparece aqui.</p>';
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+          return;
+        }
+
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+
+          console.log("[renderer] mermaid.render…", { requestId });
+          const { svg } = await mermaid.render(id, code);
+          console.log("[renderer] mermaid.done", {
+            requestId,
+            svgLen: svg.length,
+            ms: Math.round(performance.now() - t0),
+          });
+          if (requestId !== latestRequestId) {
+            clearMermaidArtifacts();
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+
+          root.innerHTML = svg;
+          clearMermaidArtifacts();
+          await waitForLayout();
+          const height = measureHeight();
+          console.log("[renderer] layout", { requestId, height, ms: Math.round(performance.now() - t0) });
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height,
+            expand: expandMode,
+          });
+        } catch (error) {
+          const message = error?.message || String(error);
+          console.error("[renderer] error", message);
+          clearMermaidArtifacts();
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          root.innerHTML = "";
+          const err = document.createElement("div");
+          err.className = "error";
+          err.textContent = message;
+          root.appendChild(err);
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: false,
+            error: message,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+        }
+      }
+
+      window.addEventListener("message", (event) => {
+        // Com origin opaco, confia só no event.source (parent).
+        if (event.source !== parent) return;
+        const data = event.data;
+        if (!data) return;
+
+        if (data.type === "ping") {
+          post({ type: "renderer-ready" });
+          return;
+        }
+
+        if (data.type === "remeasure") {
+          void waitForLayout().then(() => {
+            post({
+              type: "render-result",
+              requestId: data.requestId,
+              ok: true,
+              height: measureHeight(),
+              expand: expandMode,
+              remeasured: true,
+            });
+          });
+          return;
+        }
+
+        if (data.type === "parse") {
+          const { code, requestId } = data;
+          chain = chain
+            .catch(() => {})
+            .then(async () => {
+              try {
+                const prepared = prepareMermaidCode(code);
+                if (!prepared || !String(prepared).trim()) {
+                  post({ type: "parse-result", requestId, ok: true });
+                  return;
+                }
+                await mermaid.parse(prepared);
+                post({ type: "parse-result", requestId, ok: true });
+              } catch (error) {
+                post({
+                  type: "parse-result",
+                  requestId,
+                  ok: false,
+                  error: error?.message || String(error),
+                });
+              }
+            });
+          return;
+        }
+
+        if (data.type !== "render") return;
+
+        const { code, requestId, expand } = data;
+        latestRequestId = requestId;
+        chain = chain
+          .catch(() => {})
+          .then(() => renderDiagram(code, requestId, Boolean(expand)));
+      });
+
+      setMode(false);
+      post({ type: "renderer-ready" });
+    </script>
+  </body>
+</html>

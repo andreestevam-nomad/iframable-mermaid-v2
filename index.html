@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mermaid Share</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./css/styles.css?v=20260728j" />
+    <script type="importmap">
+      {
+        "imports": {
+          "codemirror": "https://esm.sh/codemirror@6.0.1?deps=@codemirror/state@6.5.2,@codemirror/view@6.36.5,@codemirror/language@6.11.0,@codemirror/commands@6.8.0,@codemirror/search@6.5.10,@codemirror/autocomplete@6.18.6,@codemirror/lint@6.8.5",
+          "@codemirror/state": "https://esm.sh/@codemirror/state@6.5.2",
+          "@codemirror/view": "https://esm.sh/@codemirror/view@6.36.5?deps=@codemirror/state@6.5.2",
+          "@codemirror/language": "https://esm.sh/@codemirror/language@6.11.0?deps=@codemirror/state@6.5.2,@codemirror/view@6.36.5",
+          "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.8.0?deps=@codemirror/state@6.5.2,@codemirror/view@6.36.5,@codemirror/language@6.11.0",
+          "@codemirror/lint": "https://esm.sh/@codemirror/lint@6.8.5?deps=@codemirror/state@6.5.2,@codemirror/view@6.36.5",
+          "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.1",
+          "@lezer/common": "https://esm.sh/@lezer/common@1.2.3"
+        }
+      }
+    </script>
+  </head>
+  <body data-view="input">
+    <header class="app-header" id="app-header">
+      <div class="brand-row">
+        <div class="brand">Mermaid Share</div>
+        <button
+          type="button"
+          id="btn-help"
+          class="btn-info"
+          aria-haspopup="dialog"
+          aria-controls="help-dialog"
+          title="Como funciona"
+        >
+          i
+        </button>
+      </div>
+      <p id="status" aria-live="polite"></p>
+    </header>
+
+    <dialog id="help-dialog" class="help-dialog">
+      <form method="dialog" class="help-dialog-inner">
+        <header class="help-dialog-header">
+          <h2>Como funciona</h2>
+          <button type="submit" class="btn-inline" value="close" aria-label="Fechar">
+            Fechar
+          </button>
+        </header>
+        <div class="help-dialog-body">
+          <ol class="help-steps">
+            <li>
+              <strong>Escreva ou cole</strong> um diagrama Mermaid no painel da
+              esquerda. O editor destaca a sintaxe e valida o código ao digitar.
+            </li>
+            <li>
+              Use <strong>Atualizar preview</strong> para ver o resultado, ou
+              ligue o <strong>Modo auto</strong> para atualizar preview e URL a
+              cada alteração.
+            </li>
+            <li>
+              (Opcional) Defina um <strong>título</strong> na barra inferior —
+              ele entra na URL como <code>?t=</code> e aparece acima do
+              diagrama na visualização final.
+            </li>
+            <li>
+              Clique em <strong>Gerar URL</strong> (ou deixe o modo auto fazer
+              isso). O diagrama é compactado em <code>?d=</code>. Depois use
+              <strong>Copiar URL</strong> ou <strong>Abrir em nova guia</strong>
+              para compartilhar.
+            </li>
+            <li>
+              Na página compartilhada, o visitante vê o <strong>título</strong>,
+              o <strong>diagrama</strong> e o <strong>código-fonte</strong>, com
+              opções para copiar o código, editar ou abrir em tela cheia.
+            </li>
+          </ol>
+          <p class="help-note">
+            Atalhos úteis no editor:
+            <strong>Remover comentários</strong>,
+            <strong>Formatar</strong> (reindenta) e
+            <strong>Minificar</strong> (compacta o texto).
+          </p>
+        </div>
+      </form>
+    </dialog>
+
+    <main id="view-input">
+      <div class="input-layout">
+        <section class="panel" aria-labelledby="label-editor">
+          <div class="panel-label" id="label-editor">
+            Código Mermaid
+            <div class="panel-actions">
+              <button type="button" id="btn-strip-comments" class="btn-inline">
+                Remover comentários
+              </button>
+              <button type="button" id="btn-format" class="btn-inline">
+                Formatar
+              </button>
+              <button type="button" id="btn-minify" class="btn-inline">
+                Minificar
+              </button>
+            </div>
+          </div>
+          <div
+            id="editor"
+            class="editor-host"
+            role="textbox"
+            aria-label="Código Mermaid"
+            aria-multiline="true"
+          ></div>
+        </section>
+        <section class="panel" aria-labelledby="label-preview">
+          <div class="panel-label" id="label-preview">
+            Preview
+            <span id="preview-status" class="preview-status" hidden></span>
+            <div class="panel-actions">
+              <label
+                class="auto-mode"
+                for="chk-auto"
+                title="Atualiza preview e URL ao editar"
+              >
+                <input type="checkbox" id="chk-auto" />
+                Modo auto
+              </label>
+              <button type="button" id="btn-render-preview" class="btn-inline">
+                Atualizar preview
+              </button>
+            </div>
+          </div>
+          <div class="preview-wrap">
+            <iframe
+              id="preview-frame"
+              class="render-frame"
+              title="Preview Mermaid"
+              sandbox="allow-scripts"
+            ></iframe>
+          </div>
+          <div id="preview-error" class="error-box" hidden></div>
+        </section>
+      </div>
+      <footer class="input-footer">
+        <div class="footer-title-row">
+          <label class="title-field-label" for="diagram-title">Título</label>
+          <input
+            id="diagram-title"
+            class="title-field-input"
+            type="text"
+            maxlength="160"
+            placeholder="Título do diagrama (opcional)"
+            autocomplete="off"
+          />
+        </div>
+        <div class="footer-main">
+          <div class="url-preview">
+            <div class="url-preview-meta">
+              <span class="url-preview-label">URL compactada</span>
+              <span id="url-char-count" class="url-char-count">0 chars</span>
+            </div>
+            <code id="url-preview-text" class="url-preview-text"
+              >Clique em “Gerar URL” após colar o diagrama.</code
+            >
+          </div>
+          <div class="actions">
+            <button type="button" class="primary" id="btn-generate-url">
+              Gerar URL
+            </button>
+            <button type="button" id="btn-copy-url">Copiar URL</button>
+            <button type="button" id="btn-open-input">Abrir em nova guia</button>
+          </div>
+        </div>
+      </footer>
+    </main>
+
+    <main id="view-output" hidden>
+      <div class="output-main">
+        <h1 id="output-title" class="output-title" hidden></h1>
+        <div id="fullscreen-target">
+          <iframe
+            id="output-frame"
+            class="render-frame output-frame"
+            title="Diagrama Mermaid"
+            sandbox="allow-scripts"
+          ></iframe>
+          <div id="output-error" class="error-box" hidden></div>
+        </div>
+        <section class="output-source" id="output-source" hidden>
+          <div class="output-source-header">
+            <span class="output-source-label">Código Mermaid</span>
+            <button type="button" id="btn-copy-source" class="btn-inline">
+              Copiar código
+            </button>
+          </div>
+          <pre id="output-source-code" class="output-source-code"></pre>
+        </section>
+        <div class="output-actions">
+          <button type="button" class="primary" id="btn-fullscreen">
+            Ver em tela cheia
+          </button>
+          <button type="button" id="btn-edit">Editar</button>
+          <button type="button" id="btn-open-output">Abrir em nova guia</button>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="./js/app.js?v=20260728j"></script>
+  </body>
+</html>
