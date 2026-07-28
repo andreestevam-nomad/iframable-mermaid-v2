@@ -19,15 +19,48 @@
       }
       html.mode-expand,
       html.mode-expand body {
-        height: auto;
+        height: 100%;
         overflow: hidden;
       }
       body {
         padding: 0.5rem;
         box-sizing: border-box;
       }
+      html.mode-expand body {
+        padding: 0;
+      }
+      #viewport {
+        position: relative;
+        width: 100%;
+      }
+      html.mode-scroll #viewport {
+        min-height: 0;
+      }
+      html.mode-expand #viewport {
+        height: 100%;
+        overflow: hidden;
+        touch-action: none;
+        cursor: grab;
+        background: #fff;
+      }
+      html.mode-expand #viewport.is-panning {
+        cursor: grabbing;
+      }
+      #stage {
+        transform-origin: 0 0;
+        will-change: transform;
+      }
+      html.mode-scroll #stage {
+        transform: none !important;
+      }
       #root {
         width: 100%;
+      }
+      html.mode-expand #root {
+        width: max-content;
+        min-width: 100%;
+        box-sizing: border-box;
+        padding: 0.75rem;
       }
       #root svg {
         max-width: 100%;
@@ -35,6 +68,11 @@
         height: auto;
         display: block;
         margin: 0 auto;
+      }
+      html.mode-expand #root svg {
+        max-width: none;
+        width: auto;
+        height: auto;
       }
       .hint {
         margin: 2rem 0;
@@ -52,10 +90,68 @@
         font: 14px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
         white-space: pre-wrap;
       }
+      #zoom-controls {
+        display: none;
+        position: absolute;
+        right: 0.75rem;
+        bottom: 0.75rem;
+        z-index: 5;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem;
+        border: 1px solid #d5dbe3;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 4px 14px rgba(26, 35, 50, 0.12);
+        font: 13px/1 "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+      html.mode-expand #zoom-controls {
+        display: flex;
+      }
+      #zoom-controls button {
+        width: 2rem;
+        height: 2rem;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #1a2332;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #zoom-controls button:hover {
+        background: #eef2f6;
+      }
+      #zoom-controls button:active {
+        background: #e2e8ef;
+      }
+      #zoom-level {
+        min-width: 3.25rem;
+        text-align: center;
+        color: #5c6b7a;
+        font-variant-numeric: tabular-nums;
+        user-select: none;
+      }
     </style>
   </head>
   <body>
-    <div id="root"><p class="hint">O preview aparece aqui.</p></div>
+    <div id="viewport">
+      <div id="stage">
+        <div id="root"><p class="hint">O preview aparece aqui.</p></div>
+      </div>
+      <div id="zoom-controls" aria-label="Controles de zoom">
+        <button type="button" id="zoom-out" title="Diminuir zoom" aria-label="Diminuir zoom">
+          −
+        </button>
+        <span id="zoom-level">100%</span>
+        <button type="button" id="zoom-in" title="Aumentar zoom" aria-label="Aumentar zoom">
+          +
+        </button>
+        <button type="button" id="zoom-reset" title="Resetar zoom" aria-label="Resetar zoom">
+          ⟲
+        </button>
+      </div>
+    </div>
     <script type="module">
       import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.6.0/+esm";
 
@@ -73,11 +169,30 @@
         },
       });
 
+      const viewport = document.getElementById("viewport");
+      const stage = document.getElementById("stage");
       const root = document.getElementById("root");
+      const zoomLevelEl = document.getElementById("zoom-level");
+      const btnZoomIn = document.getElementById("zoom-in");
+      const btnZoomOut = document.getElementById("zoom-out");
+      const btnZoomReset = document.getElementById("zoom-reset");
+
       let renderCount = 0;
       let latestRequestId = 0;
       let chain = Promise.resolve();
       let expandMode = false;
+
+      const MIN_SCALE = 0.25;
+      const MAX_SCALE = 4;
+      const ZOOM_STEP = 1.2;
+      let scale = 1;
+      let tx = 0;
+      let ty = 0;
+      let panPointerId = null;
+      let panStartX = 0;
+      let panStartY = 0;
+      let panOriginX = 0;
+      let panOriginY = 0;
 
       /**
        * Mermaid 11 não quebra linha com a sequência literal "\\n" nos rótulos.
@@ -93,13 +208,65 @@
         parent.postMessage(payload, "*");
       }
 
+      function clampScale(value) {
+        return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
+      }
+
+      function applyTransform() {
+        if (!expandMode) {
+          stage.style.transform = "";
+          zoomLevelEl.textContent = "100%";
+          return;
+        }
+        stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+        zoomLevelEl.textContent = `${Math.round(scale * 100)}%`;
+      }
+
+      function resetView() {
+        scale = 1;
+        tx = 0;
+        ty = 0;
+        applyTransform();
+      }
+
+      function zoomAt(nextScale, clientX, clientY) {
+        if (!expandMode) return;
+        const clamped = clampScale(nextScale);
+        if (clamped === scale) return;
+
+        const rect = viewport.getBoundingClientRect();
+        const px = clientX - rect.left;
+        const py = clientY - rect.top;
+        const worldX = (px - tx) / scale;
+        const worldY = (py - ty) / scale;
+        scale = clamped;
+        tx = px - worldX * scale;
+        ty = py - worldY * scale;
+        applyTransform();
+      }
+
+      function zoomBy(factor) {
+        if (!expandMode) return;
+        const rect = viewport.getBoundingClientRect();
+        zoomAt(scale * factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      }
+
       function setMode(expand) {
         expandMode = Boolean(expand);
         document.documentElement.classList.toggle("mode-expand", expandMode);
         document.documentElement.classList.toggle("mode-scroll", !expandMode);
+        if (!expandMode) {
+          panPointerId = null;
+          viewport.classList.remove("is-panning");
+        }
+        resetView();
       }
 
       function measureHeight() {
+        if (expandMode) {
+          // Viewport fixo no parent; altura do iframe vem do CSS/viewport da página.
+          return Math.max(120, Math.ceil(window.innerHeight || 120));
+        }
         const svg = root.querySelector("svg");
         if (svg) {
           const rect = svg.getBoundingClientRect();
@@ -121,10 +288,25 @@
 
       function clearMermaidArtifacts() {
         for (const node of [...document.body.children]) {
-          if (node === root) continue;
+          if (node === viewport) continue;
           if (node.tagName === "SVG" || node.getAttribute("aria-hidden") === "true") {
             node.remove();
           }
+        }
+      }
+
+      /** No expand, força tamanho intrínseco do SVG para zoom/pan úteis. */
+      function prepareExpandSvg() {
+        if (!expandMode) return;
+        const svg = root.querySelector("svg");
+        if (!svg) return;
+        svg.style.maxWidth = "none";
+        svg.style.width = "auto";
+        svg.style.height = "auto";
+        const vb = svg.viewBox?.baseVal;
+        if (vb && vb.width > 0 && vb.height > 0) {
+          svg.setAttribute("width", String(vb.width));
+          svg.setAttribute("height", String(vb.height));
         }
       }
 
@@ -177,6 +359,7 @@
           }
 
           root.innerHTML = svg;
+          prepareExpandSvg();
           clearMermaidArtifacts();
           await waitForLayout();
           const height = measureHeight();
@@ -212,6 +395,64 @@
           });
         }
       }
+
+      btnZoomIn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        zoomBy(ZOOM_STEP);
+      });
+      btnZoomOut.addEventListener("click", (event) => {
+        event.stopPropagation();
+        zoomBy(1 / ZOOM_STEP);
+      });
+      btnZoomReset.addEventListener("click", (event) => {
+        event.stopPropagation();
+        resetView();
+      });
+
+      viewport.addEventListener("pointerdown", (event) => {
+        if (!expandMode) return;
+        if (event.target.closest("#zoom-controls")) return;
+        if (event.button !== 0 && event.pointerType === "mouse") return;
+        panPointerId = event.pointerId;
+        panStartX = event.clientX;
+        panStartY = event.clientY;
+        panOriginX = tx;
+        panOriginY = ty;
+        viewport.classList.add("is-panning");
+        viewport.setPointerCapture(event.pointerId);
+      });
+
+      viewport.addEventListener("pointermove", (event) => {
+        if (!expandMode || panPointerId !== event.pointerId) return;
+        tx = panOriginX + (event.clientX - panStartX);
+        ty = panOriginY + (event.clientY - panStartY);
+        applyTransform();
+      });
+
+      function endPan(event) {
+        if (panPointerId !== event.pointerId) return;
+        panPointerId = null;
+        viewport.classList.remove("is-panning");
+        try {
+          viewport.releasePointerCapture(event.pointerId);
+        } catch {
+          /* already released */
+        }
+      }
+
+      viewport.addEventListener("pointerup", endPan);
+      viewport.addEventListener("pointercancel", endPan);
+
+      viewport.addEventListener(
+        "wheel",
+        (event) => {
+          if (!expandMode) return;
+          event.preventDefault();
+          const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+          zoomAt(scale * factor, event.clientX, event.clientY);
+        },
+        { passive: false },
+      );
 
       window.addEventListener("message", (event) => {
         // Com origin opaco, confia só no event.source (parent).

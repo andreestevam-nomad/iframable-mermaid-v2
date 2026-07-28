@@ -300,9 +300,14 @@ function failPendingFor(iframe, reason) {
   }
 }
 
-function applyOutputHeight(height) {
-  const safe = Math.max(120, Math.ceil(Number(height) || 120));
-  els.outputFrame.style.height = `${safe}px`;
+function applyOutputHeight() {
+  // Viewport fixo para zoom/pan; o SVG não define mais a altura do iframe.
+  if (document.fullscreenElement === els.fullscreenTarget) {
+    els.outputFrame.style.height = "100%";
+    return;
+  }
+  const vh = Math.round(window.innerHeight * 0.7);
+  els.outputFrame.style.height = `${Math.max(320, vh)}px`;
 }
 
 async function renderInFrame(iframe, code, { expand = false } = {}) {
@@ -401,7 +406,7 @@ function onRendererMessage(event) {
   }
 
   if (entry.expand || data.expand) {
-    applyOutputHeight(data.height);
+    applyOutputHeight();
   }
 
   if (data.ok) {
@@ -748,6 +753,7 @@ function scheduleLayoutRefresh() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (!views.output.hidden) {
+      applyOutputHeight();
       remeasureOutputFrame();
       return;
     }
