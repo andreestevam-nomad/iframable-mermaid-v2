@@ -619,7 +619,7 @@ body[data-zoom="off"] #fullscreen-target {
 .output-source {
   width: 100%;
   max-width: 1100px;
-  margin: 1.25rem auto 0;
+  margin: 3rem auto 0;
   padding: 0 1rem;
   box-sizing: border-box;
 }
