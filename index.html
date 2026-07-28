@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./css/styles.css?v=20260728o" />
+    <link rel="stylesheet" href="./css/styles.css?v=20260728p" />
     <script type="importmap">
       {
         "imports": {
@@ -77,7 +77,9 @@
             <li>
               Na página compartilhada, o visitante vê o <strong>título</strong>,
               o <strong>diagrama</strong> e o <strong>código-fonte</strong>, com
-              opções para copiar o código, editar ou abrir em tela cheia.
+              opções para copiar o código, editar, tela cheia ou
+              <strong>modo zoom</strong> (<code>?z=1</code> ligado /
+              <code>?z=0</code> desligado).
             </li>
           </ol>
           <p class="help-note">
@@ -201,12 +203,11 @@
         <div class="output-actions">
           <button
             type="button"
-            class="primary"
             id="btn-zoom-mode"
-            aria-pressed="true"
-            title="Ativa ou desativa zoom, pan e viewport em tela cheia"
+            aria-pressed="false"
+            title="Ativa ou desativa zoom, pan e viewport em tela cheia (?z=)"
           >
-            Modo zoom: ligado
+            Modo zoom: desligado
           </button>
           <button type="button" id="btn-fullscreen">Ver em tela cheia</button>
           <button type="button" id="btn-edit">Editar</button>
@@ -215,6 +216,6 @@
       </div>
     </main>
 
-    <script type="module" src="./js/app.js?v=20260728o"></script>
+    <script type="module" src="./js/app.js?v=20260728p"></script>
   </body>
 </html>

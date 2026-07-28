@@ -20,6 +20,8 @@ const IFRAME_TARGET = "*";
 /** Origem canônica das URLs compartilháveis (evita localhost no link). */
 const PUBLIC_SHARE_ORIGIN = "https://andreestevam-nomad.github.io";
 const PUBLIC_SHARE_PATH = "/iframable-mermaid-v2/";
+/** Query param do modo zoom/pan na view compartilhada (`z=1` ligado, `z=0`/ausente desligado). */
+const ZOOM_PARAM = "z";
 
 const views = {
   input: document.getElementById("view-input"),
@@ -75,8 +77,8 @@ let lastPreviewCode = null;
 let lastOutputCode = null;
 let lastOutputContentHeight = 280;
 let resizeTimer = null;
-/** Modo zoom/pan na view compartilhada (ligado por padrão). */
-let zoomModeEnabled = true;
+/** Modo zoom/pan na view compartilhada (desligado por padrão; ver `?z=`). */
+let zoomModeEnabled = false;
 
 /** @type {WeakMap<HTMLIFrameElement, Promise<void>>} */
 const readyMap = new WeakMap();
@@ -180,7 +182,25 @@ function getShareBaseUrl() {
   return url;
 }
 
-function buildShareUrl(param, title = getDiagramTitle()) {
+function parseZoomParam(params = new URLSearchParams(window.location.search)) {
+  const raw = params.get(ZOOM_PARAM);
+  if (raw == null || raw === "") return false;
+  const value = String(raw).trim().toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
+
+function syncZoomQueryParam() {
+  if (views.output.hidden) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set(ZOOM_PARAM, zoomModeEnabled ? "1" : "0");
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next !== current) {
+    window.history.replaceState({}, "", next);
+  }
+}
+
+function buildShareUrl(param, title = getDiagramTitle(), { zoom = false } = {}) {
   const url = getShareBaseUrl();
   url.search = "";
   url.hash = "";
@@ -188,6 +208,10 @@ function buildShareUrl(param, title = getDiagramTitle()) {
   const cleanTitle = String(title || "").trim();
   if (cleanTitle) {
     url.searchParams.set("t", cleanTitle);
+  }
+  // Padrão desligado: só inclui z=1 quando o link deve abrir com zoom.
+  if (zoom) {
+    url.searchParams.set(ZOOM_PARAM, "1");
   }
   return url.toString();
 }
@@ -340,6 +364,7 @@ function requestOutputFit() {
 async function setZoomMode(enabled) {
   zoomModeEnabled = Boolean(enabled);
   syncZoomModeUi();
+  syncZoomQueryParam();
   applyOutputHeight(lastOutputContentHeight);
   try {
     await ensureRenderer(els.outputFrame);
@@ -865,6 +890,7 @@ async function copyOutputSource() {
 async function bootOutput(param, title = "") {
   showView("output");
   syncZoomModeUi();
+  syncZoomQueryParam();
   applyOutputHeight(lastOutputContentHeight);
   setStatus("Carregando diagrama…", "muted");
   els.outputError.hidden = true;
@@ -988,6 +1014,7 @@ async function boot() {
   const params = new URLSearchParams(window.location.search);
   const diagramParam = params.get("d");
   const titleParam = params.get("t") || "";
+  zoomModeEnabled = parseZoomParam(params);
 
   if (diagramParam) {
     await bootOutput(diagramParam, titleParam);

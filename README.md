@@ -1,6 +1,8 @@
 # Mermaid Share
 
-App estática para escrever diagramas Mermaid, gerar uma URL compactada (`?d=` + `?t=`) e compartilhar a visualização.
+App estática para escrever diagramas Mermaid, gerar uma URL compactada (`?d=` + `?t=` + opcional `?z=`) e compartilhar a visualização.
+
+Na view compartilhada, `?z=1` liga o modo zoom/pan e `?z=0` (ou ausência de `z`) deixa desligado — o botão “Modo zoom” atualiza esse parâmetro.
 
 ## Uso local
 
