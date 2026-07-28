@@ -55,13 +55,20 @@ body[data-view="output"] {
 body[data-view="output"] .app-header {
   display: flex;
   justify-content: flex-end;
-  border-bottom-color: transparent;
+  border: 0;
   background: transparent;
+  /* Evita faixa desfocada em cima do diagrama (backdrop-filter no header full-width). */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   position: absolute;
   top: 0;
-  left: 0;
   right: 0;
+  left: auto;
+  width: auto;
+  padding: 0.75rem 1rem;
   pointer-events: none;
+  z-index: 20;
+  box-shadow: none;
 }
 
 body[data-view="output"] .app-header .brand-row {
