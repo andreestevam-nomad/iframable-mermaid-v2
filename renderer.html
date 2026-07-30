@@ -43,6 +43,11 @@
         cursor: grab;
         background: #fff;
       }
+      html.theme-dark-bg,
+      html.theme-dark-bg body,
+      html.theme-dark-bg #viewport {
+        background: #0f1419;
+      }
       html.mode-expand #viewport.is-panning {
         cursor: grabbing;
       }
@@ -151,12 +156,25 @@
       </div>
     </div>
     <script type="module">
-      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.6.0/+esm";
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.16.0/+esm";
 
-      mermaid.initialize({
+      const DEFAULT_THEME = "neutral";
+      const MERMAID_THEMES = new Set([
+        "default",
+        "neutral",
+        "dark",
+        "forest",
+        "base",
+        "neo",
+        "neo-dark",
+        "redux",
+        "redux-dark",
+        "redux-color",
+        "redux-dark-color",
+      ]);
+      const MERMAID_BASE_CONFIG = {
         startOnLoad: false,
         securityLevel: "strict",
-        theme: "neutral",
         flowchart: {
           // true: interpreta \n e <br/> nos rótulos (false mostrava "\n" literal).
           htmlLabels: true,
@@ -165,7 +183,45 @@
           rankSpacing: 35,
           padding: 12,
         },
-      });
+      };
+
+      let currentTheme = "";
+
+      function normalizeTheme(value) {
+        const theme = String(value || "")
+          .trim()
+          .toLowerCase();
+        return MERMAID_THEMES.has(theme) ? theme : DEFAULT_THEME;
+      }
+
+      function isDarkTheme(theme) {
+        return /(^|-)dark(-|$)/.test(theme);
+      }
+
+      function applyMermaidTheme(theme) {
+        const next = normalizeTheme(theme);
+        if (next === currentTheme) {
+          document.documentElement.dataset.mermaidTheme = currentTheme;
+          document.documentElement.classList.toggle(
+            "theme-dark-bg",
+            isDarkTheme(currentTheme),
+          );
+          return currentTheme;
+        }
+        currentTheme = next;
+        document.documentElement.dataset.mermaidTheme = currentTheme;
+        document.documentElement.classList.toggle(
+          "theme-dark-bg",
+          isDarkTheme(currentTheme),
+        );
+        mermaid.initialize({
+          ...MERMAID_BASE_CONFIG,
+          theme: currentTheme,
+        });
+        return currentTheme;
+      }
+
+      applyMermaidTheme(DEFAULT_THEME);
 
       const viewport = document.getElementById("viewport");
       const stage = document.getElementById("stage");
@@ -184,9 +240,13 @@
       const MAX_SCALE = 8;
       const ZOOM_STEP = 1.2;
       const FIT_PADDING = 32;
+      const VIEW_NOTIFY_MS = 120;
       let scale = 1;
       let tx = 0;
       let ty = 0;
+      /** @type {{ scale: number, cx: number, cy: number } | null} */
+      let preferredView = null;
+      let viewNotifyTimer = 0;
       let panPointerId = null;
       let panStartX = 0;
       let panStartY = 0;
@@ -211,6 +271,59 @@
         return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
       }
 
+      function normalizeView(view) {
+        if (!view || typeof view !== "object") return null;
+        const nextScale = clampScale(Number(view.scale));
+        const cx = Number(view.cx);
+        const cy = Number(view.cy);
+        if (!Number.isFinite(nextScale) || nextScale <= 0) return null;
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+        return { scale: nextScale, cx, cy };
+      }
+
+      function getWorldCenter() {
+        const vw = viewport.clientWidth || 0;
+        const vh = viewport.clientHeight || 0;
+        const safeScale = scale > 0 ? scale : 1;
+        return {
+          cx: (vw / 2 - tx) / safeScale,
+          cy: (vh / 2 - ty) / safeScale,
+        };
+      }
+
+      function capturePreferredView() {
+        if (!expandMode) {
+          preferredView = null;
+          return;
+        }
+        const { cx, cy } = getWorldCenter();
+        preferredView = { scale, cx, cy };
+      }
+
+      function notifyViewChanged() {
+        if (!expandMode) return;
+        if (viewNotifyTimer) {
+          window.clearTimeout(viewNotifyTimer);
+          viewNotifyTimer = 0;
+        }
+        const { cx, cy } = getWorldCenter();
+        post({
+          type: "view-changed",
+          scale,
+          cx,
+          cy,
+        });
+      }
+
+      function scheduleViewNotify() {
+        if (!expandMode) return;
+        if (viewNotifyTimer) window.clearTimeout(viewNotifyTimer);
+        viewNotifyTimer = window.setTimeout(() => {
+          viewNotifyTimer = 0;
+          notifyViewChanged();
+        }, VIEW_NOTIFY_MS);
+      }
+
       function applyTransform() {
         if (!expandMode) {
           stage.style.transform = "";
@@ -219,6 +332,35 @@
         }
         stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
         zoomLevelEl.textContent = `${Math.round(scale * 100)}%`;
+      }
+
+      function applyView(view) {
+        if (!expandMode) return false;
+        const normalized = normalizeView(view);
+        if (!normalized) return false;
+        const vw = viewport.clientWidth;
+        const vh = viewport.clientHeight;
+        if (!(vw > 0 && vh > 0)) return false;
+        scale = normalized.scale;
+        tx = vw / 2 - normalized.cx * scale;
+        ty = vh / 2 - normalized.cy * scale;
+        preferredView = normalized;
+        applyTransform();
+        return true;
+      }
+
+      function resolveView(view = preferredView) {
+        if (!expandMode) {
+          applyTransform();
+          return;
+        }
+        if (applyView(view)) {
+          scheduleViewNotify();
+          return;
+        }
+        fitToViewport();
+        capturePreferredView();
+        scheduleViewNotify();
       }
 
       function readSvgSize(svg) {
@@ -278,7 +420,10 @@
       }
 
       function resetView() {
+        preferredView = null;
         fitToViewport();
+        capturePreferredView();
+        notifyViewChanged();
       }
 
       function zoomAt(nextScale, clientX, clientY) {
@@ -295,6 +440,8 @@
         tx = px - worldX * scale;
         ty = py - worldY * scale;
         applyTransform();
+        capturePreferredView();
+        scheduleViewNotify();
       }
 
       function zoomBy(factor) {
@@ -310,6 +457,11 @@
         if (!expandMode) {
           panPointerId = null;
           viewport.classList.remove("is-panning");
+          preferredView = null;
+          if (viewNotifyTimer) {
+            window.clearTimeout(viewNotifyTimer);
+            viewNotifyTimer = 0;
+          }
           scale = 1;
           tx = 0;
           ty = 0;
@@ -341,13 +493,28 @@
         );
       }
 
+      /**
+       * Mermaid cria nós temporários no body (`#d{id}`, `#i{id}`) e, em erro de
+       * sintaxe, deixa o SVG da “bombinha” lá. Cada render usa um id novo, então
+       * sem limpeza ampla os erros se acumulam.
+       */
       function clearMermaidArtifacts() {
         for (const node of [...document.body.children]) {
-          if (node === viewport) continue;
-          if (node.tagName === "SVG" || node.getAttribute("aria-hidden") === "true") {
-            node.remove();
-          }
+          if (node === viewport || node.tagName === "SCRIPT") continue;
+          node.remove();
         }
+        for (const node of [...viewport.children]) {
+          if (node.id === "stage" || node.id === "zoom-controls") continue;
+          node.remove();
+        }
+        // Fallback: qualquer residual de erro Mermaid ainda no documento.
+        document
+          .querySelectorAll("svg .error-icon, svg .error-text")
+          .forEach((node) => {
+            const host = node.closest("svg")?.parentElement || node.closest("svg");
+            if (!host || host === root || root.contains(host)) return;
+            host.remove();
+          });
       }
 
       /** No expand, força tamanho em px (evita colapso width:% dentro do viewport). */
@@ -379,12 +546,14 @@
         svg.style.height = "auto";
       }
 
-      async function applyZoomMode(enabled) {
+      async function applyZoomMode(enabled, view = null) {
+        const nextView = normalizeView(view);
+        if (nextView) preferredView = nextView;
         setMode(Boolean(enabled));
         if (expandMode) {
           prepareExpandSvg();
           await waitForLayout();
-          fitToViewport();
+          resolveView(preferredView);
         } else {
           restoreScrollSvg();
           await waitForLayout();
@@ -396,20 +565,35 @@
         });
       }
 
-      async function renderDiagram(rawCode, requestId, expand) {
+      async function renderDiagram(
+        rawCode,
+        requestId,
+        expand,
+        view = null,
+        theme = currentTheme,
+      ) {
         const t0 = performance.now();
         const code = prepareMermaidCode(rawCode);
-        console.log("[renderer] start", { requestId, chars: code?.length || 0, expand });
+        const nextView = normalizeView(view);
+        applyMermaidTheme(theme);
+        console.log("[renderer] start", {
+          requestId,
+          chars: code?.length || 0,
+          expand,
+          theme: currentTheme,
+        });
 
         if (requestId !== latestRequestId) {
           post({ type: "render-result", requestId, ok: true, skipped: true });
           return;
         }
 
+        if (nextView) preferredView = nextView;
         setMode(expand);
         renderCount += 1;
         const id = `r-${requestId}-${renderCount}`;
         root.replaceChildren();
+        clearMermaidArtifacts();
 
         if (!code || !code.trim()) {
           root.innerHTML = '<p class="hint">O preview aparece aqui.</p>';
@@ -427,6 +611,7 @@
         try {
           await new Promise((resolve) => setTimeout(resolve, 0));
           if (requestId !== latestRequestId) {
+            clearMermaidArtifacts();
             post({ type: "render-result", requestId, ok: true, skipped: true });
             return;
           }
@@ -450,7 +635,9 @@
           await waitForLayout();
           // Parent pode ainda estar ajustando a altura do iframe; espera um frame a mais.
           await waitForLayout();
-          fitToViewport();
+          if (expandMode) {
+            resolveView(preferredView);
+          }
           const height = measureHeight();
           console.log("[renderer] layout", { requestId, height, ms: Math.round(performance.now() - t0) });
           post({
@@ -516,6 +703,8 @@
         tx = panOriginX + (event.clientX - panStartX);
         ty = panOriginY + (event.clientY - panStartY);
         applyTransform();
+        capturePreferredView();
+        scheduleViewNotify();
       });
 
       function endPan(event) {
@@ -526,6 +715,10 @@
           viewport.releasePointerCapture(event.pointerId);
         } catch {
           /* already released */
+        }
+        if (expandMode) {
+          capturePreferredView();
+          notifyViewChanged();
         }
       }
 
@@ -555,12 +748,27 @@
         }
 
         if (data.type === "fit-view") {
-          void waitForLayout().then(() => fitToViewport());
+          void waitForLayout().then(() => {
+            preferredView = null;
+            resolveView(null);
+          });
+          return;
+        }
+
+        if (data.type === "set-view") {
+          const nextView = normalizeView(data.view);
+          if (nextView) preferredView = nextView;
+          void waitForLayout().then(() => resolveView(preferredView));
+          return;
+        }
+
+        if (data.type === "set-theme") {
+          applyMermaidTheme(data.theme);
           return;
         }
 
         if (data.type === "set-zoom-mode") {
-          void applyZoomMode(Boolean(data.enabled));
+          void applyZoomMode(Boolean(data.enabled), data.view);
           return;
         }
 
@@ -605,11 +813,13 @@
 
         if (data.type !== "render") return;
 
-        const { code, requestId, expand } = data;
+        const { code, requestId, expand, view, theme } = data;
         latestRequestId = requestId;
         chain = chain
           .catch(() => {})
-          .then(() => renderDiagram(code, requestId, Boolean(expand)));
+          .then(() =>
+            renderDiagram(code, requestId, Boolean(expand), view, theme),
+          );
       });
 
       setMode(false);

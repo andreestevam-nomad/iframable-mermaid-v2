@@ -4,7 +4,7 @@ import {
   URL_WARN_THRESHOLD,
 } from "./compress.js";
 import { formatMermaid, minifyMermaid, removeComments } from "./mermaid-text.js";
-import { createMermaidEditor } from "./editor.js";
+import { createMermaidEditor, createMermaidSourceViewer } from "./editor.js";
 import { log } from "./log.js";
 
 const DRAFT_KEY = "mermaid-draft";
@@ -22,6 +22,28 @@ const PUBLIC_SHARE_ORIGIN = "https://andreestevam-nomad.github.io";
 const PUBLIC_SHARE_PATH = "/iframable-mermaid-v2/";
 /** Query param do modo zoom/pan na view compartilhada (`z=1` ligado, `z=0`/ausente desligado). */
 const ZOOM_PARAM = "z";
+/** Escala e centro do zoom em coords do diagrama (só com `z=1`). */
+const ZOOM_SCALE_PARAM = "zs";
+const ZOOM_X_PARAM = "zx";
+const ZOOM_Y_PARAM = "zy";
+/** Query param do tema Mermaid (`th=` + nome do tema Mermaid). */
+const THEME_PARAM = "th";
+const DEFAULT_THEME = "neutral";
+const MERMAID_THEMES = new Set([
+  "default",
+  "neutral",
+  "dark",
+  "forest",
+  "base",
+  "neo",
+  "neo-dark",
+  "redux",
+  "redux-dark",
+  "redux-color",
+  "redux-dark-color",
+]);
+/** Query param do painel de código (`mmd=show` expandido, `mmd=hide`/ausente recolhido). */
+const MMD_PARAM = "mmd";
 
 const views = {
   input: document.getElementById("view-input"),
@@ -35,6 +57,8 @@ const els = {
   previewStatus: document.getElementById("preview-status"),
   btnRenderPreview: document.getElementById("btn-render-preview"),
   chkAuto: document.getElementById("chk-auto"),
+  chkZoomPreview: document.getElementById("chk-zoom-preview"),
+  chkShowMmd: document.getElementById("chk-show-mmd"),
   status: document.getElementById("status"),
   titleInput: document.getElementById("diagram-title"),
   btnGenerateUrl: document.getElementById("btn-generate-url"),
@@ -49,8 +73,10 @@ const els = {
   outputFrame: document.getElementById("output-frame"),
   outputError: document.getElementById("output-error"),
   outputSource: document.getElementById("output-source"),
+  outputSourceViewer: document.getElementById("output-source-viewer"),
   outputSourceCode: document.getElementById("output-source-code"),
   btnCopySource: document.getElementById("btn-copy-source"),
+  btnToggleSource: document.getElementById("btn-toggle-source"),
   btnZoomMode: document.getElementById("btn-zoom-mode"),
   btnFullscreen: document.getElementById("btn-fullscreen"),
   btnEdit: document.getElementById("btn-edit"),
@@ -58,17 +84,25 @@ const els = {
   fullscreenTarget: document.getElementById("fullscreen-target"),
   btnHelp: document.getElementById("btn-help"),
   helpDialog: document.getElementById("help-dialog"),
+  selTheme: document.getElementById("sel-theme"),
 };
 
 /** @type {ReturnType<typeof createMermaidEditor> | null} */
 let editor = null;
+/** @type {ReturnType<typeof createMermaidSourceViewer> | null} */
+let sourceViewer = null;
 let persistTimer = null;
 let autoTimer = null;
 let urlSeq = 0;
 let cachedShareUrl = "";
 let cachedShareTitle = "";
+let cachedShareTheme = "";
+let cachedShareZoom = false;
+let cachedShareMmd = false;
+let cachedShareViewKey = "";
 let urlEpoch = -1;
 let urlBusy = false;
+let shareUrlTimer = null;
 let requestSeq = 0;
 let inputBound = false;
 let editorEpoch = 0;
@@ -79,6 +113,17 @@ let lastOutputContentHeight = 280;
 let resizeTimer = null;
 /** Modo zoom/pan na view compartilhada (desligado por padrão; ver `?z=`). */
 let zoomModeEnabled = false;
+/** @type {{ scale: number, cx: number, cy: number } | null} */
+let zoomView = null;
+/** Tema Mermaid ativo (default: neutral). */
+let diagramTheme = DEFAULT_THEME;
+/** Painel de código expandido na view compartilhada (`?mmd=show|hide`). */
+let sourceExpanded = false;
+/** Preferências do editor que entram na URL compartilhada. */
+let previewZoomEnabled = false;
+/** @type {{ scale: number, cx: number, cy: number } | null} */
+let previewZoomView = null;
+let shareShowMmd = false;
 
 /** @type {WeakMap<HTMLIFrameElement, Promise<void>>} */
 const readyMap = new WeakMap();
@@ -189,10 +234,44 @@ function parseZoomParam(params = new URLSearchParams(window.location.search)) {
   return value === "1" || value === "true" || value === "on" || value === "yes";
 }
 
+function formatViewNumber(value) {
+  if (!Number.isFinite(value)) return "0";
+  const rounded = Math.round(value * 1000) / 1000;
+  return String(rounded);
+}
+
+function normalizeZoomView(view) {
+  if (!view || typeof view !== "object") return null;
+  const scale = Number(view.scale);
+  const cx = Number(view.cx);
+  const cy = Number(view.cy);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  return { scale, cx, cy };
+}
+
+function parseZoomView(params = new URLSearchParams(window.location.search)) {
+  if (!parseZoomParam(params)) return null;
+  return normalizeZoomView({
+    scale: params.get(ZOOM_SCALE_PARAM),
+    cx: params.get(ZOOM_X_PARAM),
+    cy: params.get(ZOOM_Y_PARAM),
+  });
+}
+
 function syncZoomQueryParam() {
   if (views.output.hidden) return;
   const url = new URL(window.location.href);
   url.searchParams.set(ZOOM_PARAM, zoomModeEnabled ? "1" : "0");
+  if (zoomModeEnabled && zoomView) {
+    url.searchParams.set(ZOOM_SCALE_PARAM, formatViewNumber(zoomView.scale));
+    url.searchParams.set(ZOOM_X_PARAM, formatViewNumber(zoomView.cx));
+    url.searchParams.set(ZOOM_Y_PARAM, formatViewNumber(zoomView.cy));
+  } else {
+    url.searchParams.delete(ZOOM_SCALE_PARAM);
+    url.searchParams.delete(ZOOM_X_PARAM);
+    url.searchParams.delete(ZOOM_Y_PARAM);
+  }
   const next = `${url.pathname}${url.search}${url.hash}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (next !== current) {
@@ -200,7 +279,100 @@ function syncZoomQueryParam() {
   }
 }
 
-function buildShareUrl(param, title = getDiagramTitle(), { zoom = false } = {}) {
+function normalizeTheme(value) {
+  const theme = String(value || "")
+    .trim()
+    .toLowerCase();
+  return MERMAID_THEMES.has(theme) ? theme : DEFAULT_THEME;
+}
+
+function parseThemeParam(params = new URLSearchParams(window.location.search)) {
+  const raw = params.get(THEME_PARAM);
+  if (raw == null || raw === "") return DEFAULT_THEME;
+  return normalizeTheme(raw);
+}
+
+function syncThemeSelect() {
+  if (!els.selTheme) return;
+  els.selTheme.value = diagramTheme;
+}
+
+function parseMmdParam(params = new URLSearchParams(window.location.search)) {
+  const raw = params.get(MMD_PARAM);
+  if (raw == null || raw === "") return false;
+  const value = String(raw).trim().toLowerCase();
+  return value === "show" || value === "1" || value === "true" || value === "on";
+}
+
+function syncMmdQueryParam() {
+  if (views.output.hidden) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set(MMD_PARAM, sourceExpanded ? "show" : "hide");
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next !== current) {
+    window.history.replaceState({}, "", next);
+  }
+}
+
+function ensureSourceViewer() {
+  if (sourceViewer || !els.outputSourceViewer) return;
+  sourceViewer = createMermaidSourceViewer({
+    parent: els.outputSourceViewer,
+    doc: lastOutputCode || els.outputSourceCode?.value || "",
+  });
+}
+
+function setButtonLabel(button, label) {
+  if (!button) return;
+  const labelEl = button.querySelector(".btn-label");
+  if (labelEl) {
+    labelEl.textContent = label;
+  }
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function syncSourceExpandedUi() {
+  if (els.outputSource) {
+    els.outputSource.dataset.mmd = sourceExpanded ? "show" : "hide";
+  }
+  if (els.btnToggleSource) {
+    const label = sourceExpanded
+      ? "Ocultar código Mermaid"
+      : "Ver código Mermaid";
+    els.btnToggleSource.setAttribute(
+      "aria-pressed",
+      sourceExpanded ? "true" : "false",
+    );
+    setButtonLabel(els.btnToggleSource, label);
+  }
+  if (sourceExpanded) {
+    ensureSourceViewer();
+    sourceViewer?.setValue(lastOutputCode || els.outputSourceCode?.value || "");
+  }
+}
+
+function zoomViewCacheKey(view) {
+  const normalized = normalizeZoomView(view);
+  if (!normalized) return "";
+  return [
+    formatViewNumber(normalized.scale),
+    formatViewNumber(normalized.cx),
+    formatViewNumber(normalized.cy),
+  ].join("|");
+}
+
+function buildShareUrl(
+  param,
+  title = getDiagramTitle(),
+  {
+    zoom = false,
+    view = null,
+    theme = diagramTheme,
+    mmd = false,
+  } = {},
+) {
   const url = getShareBaseUrl();
   url.search = "";
   url.hash = "";
@@ -209,11 +381,82 @@ function buildShareUrl(param, title = getDiagramTitle(), { zoom = false } = {}) 
   if (cleanTitle) {
     url.searchParams.set("t", cleanTitle);
   }
+  const nextTheme = normalizeTheme(theme);
+  // Omite th quando é o padrão (neutral) para URLs mais curtas.
+  if (nextTheme !== DEFAULT_THEME) {
+    url.searchParams.set(THEME_PARAM, nextTheme);
+  }
   // Padrão desligado: só inclui z=1 quando o link deve abrir com zoom.
   if (zoom) {
     url.searchParams.set(ZOOM_PARAM, "1");
+    const normalized = normalizeZoomView(view);
+    if (normalized) {
+      url.searchParams.set(ZOOM_SCALE_PARAM, formatViewNumber(normalized.scale));
+      url.searchParams.set(ZOOM_X_PARAM, formatViewNumber(normalized.cx));
+      url.searchParams.set(ZOOM_Y_PARAM, formatViewNumber(normalized.cy));
+    }
+  }
+  // Padrão hide: só inclui mmd=show quando marcado no editor.
+  if (mmd) {
+    url.searchParams.set(MMD_PARAM, "show");
   }
   return url.toString();
+}
+
+function syncEditorShareControls() {
+  if (els.chkZoomPreview) {
+    els.chkZoomPreview.checked = previewZoomEnabled;
+  }
+  if (els.chkShowMmd) {
+    els.chkShowMmd.checked = shareShowMmd;
+  }
+  document.body.dataset.previewZoom = previewZoomEnabled ? "on" : "off";
+}
+
+function scheduleShareUrlRefresh() {
+  clearTimeout(shareUrlTimer);
+  shareUrlTimer = setTimeout(() => {
+    if (isAutoEnabled() && editorHasCode()) {
+      void refreshUrlPreview({ quiet: true });
+      return;
+    }
+    invalidateUrlPreview();
+  }, 280);
+}
+
+async function setPreviewZoomMode(enabled) {
+  previewZoomEnabled = Boolean(enabled);
+  if (!previewZoomEnabled) {
+    previewZoomView = null;
+  }
+  syncEditorShareControls();
+  scheduleShareUrlRefresh();
+  try {
+    await ensureRenderer(els.previewFrame);
+    if (lastPreviewCode != null && String(lastPreviewCode).trim()) {
+      postToRenderer(els.previewFrame, {
+        type: "set-zoom-mode",
+        enabled: previewZoomEnabled,
+        view: previewZoomEnabled ? previewZoomView : null,
+      });
+      return;
+    }
+    if (editorHasCode()) {
+      await renderPreview(getEditorValue());
+    }
+  } catch (error) {
+    setStatus(error?.message || String(error), "error");
+  }
+}
+
+function onPreviewZoomChanged() {
+  void setPreviewZoomMode(Boolean(els.chkZoomPreview?.checked));
+}
+
+function onShowMmdChanged() {
+  shareShowMmd = Boolean(els.chkShowMmd?.checked);
+  syncEditorShareControls();
+  scheduleShareUrlRefresh();
 }
 
 function isAutoEnabled() {
@@ -331,10 +574,9 @@ function failPendingFor(iframe, reason) {
 function syncZoomModeUi() {
   document.body.dataset.zoom = zoomModeEnabled ? "on" : "off";
   if (!els.btnZoomMode) return;
+  const label = zoomModeEnabled ? "Zoom ligado" : "Zoom desligado";
   els.btnZoomMode.setAttribute("aria-pressed", zoomModeEnabled ? "true" : "false");
-  els.btnZoomMode.textContent = zoomModeEnabled
-    ? "Modo zoom: ligado"
-    : "Modo zoom: desligado";
+  setButtonLabel(els.btnZoomMode, label);
   els.btnZoomMode.classList.toggle("primary", zoomModeEnabled);
 }
 
@@ -352,10 +594,14 @@ function applyOutputHeight(contentHeight) {
   els.outputFrame.style.height = `${safe}px`;
 }
 
-function requestOutputFit() {
+function requestOutputView() {
   if (!zoomModeEnabled) return;
   try {
-    postToRenderer(els.outputFrame, { type: "fit-view" });
+    if (zoomView) {
+      postToRenderer(els.outputFrame, { type: "set-view", view: zoomView });
+    } else {
+      postToRenderer(els.outputFrame, { type: "fit-view" });
+    }
   } catch {
     /* iframe indisponível */
   }
@@ -363,6 +609,9 @@ function requestOutputFit() {
 
 async function setZoomMode(enabled) {
   zoomModeEnabled = Boolean(enabled);
+  if (!zoomModeEnabled) {
+    zoomView = null;
+  }
   syncZoomModeUi();
   syncZoomQueryParam();
   applyOutputHeight(lastOutputContentHeight);
@@ -371,6 +620,7 @@ async function setZoomMode(enabled) {
     postToRenderer(els.outputFrame, {
       type: "set-zoom-mode",
       enabled: zoomModeEnabled,
+      view: zoomModeEnabled ? zoomView : null,
     });
   } catch (error) {
     setStatus(error?.message || String(error), "error");
@@ -381,9 +631,15 @@ function toggleZoomMode() {
   void setZoomMode(!zoomModeEnabled);
 }
 
-async function renderInFrame(iframe, code, { expand = false } = {}) {
+async function renderInFrame(
+  iframe,
+  code,
+  { expand = false, view = null, theme = diagramTheme } = {},
+) {
   await ensureRenderer(iframe);
   const requestId = ++requestSeq;
+  const nextView = expand ? normalizeZoomView(view) : null;
+  const nextTheme = normalizeTheme(theme);
 
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -409,7 +665,14 @@ async function renderInFrame(iframe, code, { expand = false } = {}) {
     });
 
     try {
-      postToRenderer(iframe, { type: "render", code, requestId, expand });
+      postToRenderer(iframe, {
+        type: "render",
+        code,
+        requestId,
+        expand,
+        view: nextView,
+        theme: nextTheme,
+      });
     } catch (error) {
       window.clearTimeout(timer);
       pending.delete(requestId);
@@ -452,14 +715,39 @@ function onRendererMessage(event) {
   const data = event.data;
   if (!data) return;
 
+  if (data.type === "view-changed") {
+    const nextView = normalizeZoomView({
+      scale: data.scale,
+      cx: data.cx,
+      cy: data.cy,
+    });
+    if (!nextView) return;
+
+    if (event.source === els.previewFrame?.contentWindow) {
+      if (!previewZoomEnabled) return;
+      previewZoomView = nextView;
+      scheduleShareUrlRefresh();
+      return;
+    }
+
+    if (event.source !== els.outputFrame?.contentWindow) return;
+    if (!zoomModeEnabled) return;
+    zoomView = nextView;
+    syncZoomQueryParam();
+    return;
+  }
+
   if (data.type === "zoom-mode-changed") {
+    if (event.source === els.previewFrame?.contentWindow) {
+      return;
+    }
     if (event.source !== els.outputFrame?.contentWindow) return;
     if (typeof data.height === "number") {
       lastOutputContentHeight = Math.max(120, Math.ceil(data.height));
     }
     applyOutputHeight(data.height);
     if (zoomModeEnabled) {
-      requestAnimationFrame(() => requestOutputFit());
+      requestAnimationFrame(() => requestOutputView());
     }
     return;
   }
@@ -494,7 +782,7 @@ function onRendererMessage(event) {
     }
     applyOutputHeight(data.height);
     if (zoomModeEnabled) {
-      requestAnimationFrame(() => requestOutputFit());
+      requestAnimationFrame(() => requestOutputView());
     }
   }
 
@@ -512,7 +800,11 @@ async function renderPreview(code) {
   setPreviewStatus(code.trim() ? "Renderizando preview…" : "");
 
   try {
-    await renderInFrame(els.previewFrame, code);
+    await renderInFrame(els.previewFrame, code, {
+      expand: previewZoomEnabled,
+      view: previewZoomView,
+      theme: diagramTheme,
+    });
     lastPreviewCode = code;
     previewEpoch = epochAtStart;
     setPreviewStatus("");
@@ -572,13 +864,17 @@ function persistAutoPreference() {
 function restoreAutoPreference() {
   if (!els.chkAuto) return;
   try {
-    // Migra preferência antiga de hot-reload, se existir.
-    const legacy = sessionStorage.getItem("mermaid-hot-reload");
     const stored = sessionStorage.getItem(AUTO_KEY);
-    els.chkAuto.checked =
-      stored === "1" || (stored === null && legacy === "1");
+    // Sem preferência salva (ou valor diferente de "0"): ligado por padrão.
+    // "0" preserva quando o usuário desligou manualmente.
+    if (stored === null) {
+      const legacy = sessionStorage.getItem("mermaid-hot-reload");
+      els.chkAuto.checked = legacy !== "0";
+    } else {
+      els.chkAuto.checked = stored === "1";
+    }
   } catch {
-    els.chkAuto.checked = false;
+    els.chkAuto.checked = true;
   }
 }
 
@@ -607,6 +903,10 @@ function invalidateUrlPreview() {
   urlSeq += 1;
   cachedShareUrl = "";
   cachedShareTitle = "";
+  cachedShareTheme = "";
+  cachedShareZoom = false;
+  cachedShareMmd = false;
+  cachedShareViewKey = "";
   urlEpoch = -1;
 
   const len = getEditorValue().length;
@@ -655,6 +955,11 @@ async function refreshUrlPreview({ quiet = false } = {}) {
 
   if (!source) {
     cachedShareUrl = "";
+    cachedShareTitle = "";
+    cachedShareTheme = "";
+    cachedShareZoom = false;
+    cachedShareMmd = false;
+    cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(
       isAutoEnabled()
@@ -679,11 +984,19 @@ async function refreshUrlPreview({ quiet = false } = {}) {
   try {
     const param = await compressToParam(source);
     const title = getDiagramTitle();
-    const url = buildShareUrl(param, title);
+    const theme = diagramTheme;
+    const zoom = previewZoomEnabled;
+    const view = previewZoomView;
+    const mmd = shareShowMmd;
+    const url = buildShareUrl(param, title, { theme, zoom, view, mmd });
     if (seq !== urlSeq) return;
 
     cachedShareUrl = url;
     cachedShareTitle = title;
+    cachedShareTheme = theme;
+    cachedShareZoom = zoom;
+    cachedShareMmd = mmd;
+    cachedShareViewKey = zoomViewCacheKey(view);
     urlEpoch = epochAtStart;
     const tone = url.length > URL_WARN_THRESHOLD ? "warn" : "ok";
     const label =
@@ -698,6 +1011,10 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     if (seq !== urlSeq) return;
     cachedShareUrl = "";
     cachedShareTitle = "";
+    cachedShareTheme = "";
+    cachedShareZoom = false;
+    cachedShareMmd = false;
+    cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(error?.message || String(error), "erro", "warn");
     if (!quiet) setStatus(error?.message || String(error), "error");
@@ -710,7 +1027,11 @@ async function ensureShareUrl() {
   if (
     cachedShareUrl &&
     urlEpoch === editorEpoch &&
-    cachedShareTitle === getDiagramTitle()
+    cachedShareTitle === getDiagramTitle() &&
+    cachedShareTheme === diagramTheme &&
+    cachedShareZoom === previewZoomEnabled &&
+    cachedShareMmd === shareShowMmd &&
+    cachedShareViewKey === zoomViewCacheKey(previewZoomView)
   ) {
     return cachedShareUrl;
   }
@@ -774,6 +1095,9 @@ function goToEditor(code, title = "") {
   } catch {
     // ignore
   }
+  previewZoomEnabled = zoomModeEnabled;
+  previewZoomView = zoomView;
+  shareShowMmd = sourceExpanded;
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
@@ -835,6 +1159,21 @@ function remeasureOutputFrame() {
 function refreshPreviewOnResize() {
   if (views.input.hidden || lastPreviewCode === null) return;
   if (!String(lastPreviewCode).trim()) return;
+  if (previewZoomEnabled) {
+    try {
+      if (previewZoomView) {
+        postToRenderer(els.previewFrame, {
+          type: "set-view",
+          view: previewZoomView,
+        });
+      } else {
+        postToRenderer(els.previewFrame, { type: "fit-view" });
+      }
+    } catch {
+      void renderPreview(getEditorValue());
+    }
+    return;
+  }
   void renderPreview(getEditorValue());
 }
 
@@ -844,7 +1183,7 @@ function scheduleLayoutRefresh() {
     if (!views.output.hidden) {
       applyOutputHeight(lastOutputContentHeight);
       if (zoomModeEnabled) {
-        requestOutputFit();
+        requestOutputView();
       } else {
         remeasureOutputFrame();
       }
@@ -856,18 +1195,37 @@ function scheduleLayoutRefresh() {
 
 function showOutputSource(code) {
   if (!els.outputSource || !els.outputSourceCode) return;
-  els.outputSourceCode.textContent = code;
+  const next = code ?? "";
+  els.outputSourceCode.value = next;
+  // Mantém o texto no HTML serializado (export / “salvar página”).
+  els.outputSourceCode.textContent = next;
   els.outputSource.hidden = false;
+  syncSourceExpandedUi();
 }
 
 function hideOutputSource() {
   if (!els.outputSource || !els.outputSourceCode) return;
   els.outputSource.hidden = true;
+  els.outputSourceCode.value = "";
   els.outputSourceCode.textContent = "";
+  if (sourceViewer) {
+    sourceViewer.destroy();
+    sourceViewer = null;
+  }
+}
+
+function setSourceExpanded(expanded) {
+  sourceExpanded = Boolean(expanded);
+  syncSourceExpandedUi();
+  syncMmdQueryParam();
+}
+
+function toggleSourceExpanded() {
+  setSourceExpanded(!sourceExpanded);
 }
 
 async function copyOutputSource() {
-  const code = lastOutputCode || els.outputSourceCode?.textContent || "";
+  const code = lastOutputCode || els.outputSourceCode?.value || "";
   if (!code.trim()) {
     setStatus("Nenhum código para copiar.", "warn");
     return;
@@ -876,10 +1234,12 @@ async function copyOutputSource() {
     await navigator.clipboard.writeText(code);
     setStatus("Código Mermaid copiado.", "ok");
     if (els.btnCopySource) {
-      const prev = els.btnCopySource.textContent;
-      els.btnCopySource.textContent = "Copiado";
+      els.btnCopySource.classList.add("is-copied");
+      setButtonLabel(els.btnCopySource, "Copiado");
       window.setTimeout(() => {
-        if (els.btnCopySource) els.btnCopySource.textContent = prev || "Copiar código";
+        if (!els.btnCopySource) return;
+        els.btnCopySource.classList.remove("is-copied");
+        setButtonLabel(els.btnCopySource, "Copiar código");
       }, 1500);
     }
   } catch (error) {
@@ -891,6 +1251,8 @@ async function bootOutput(param, title = "") {
   showView("output");
   syncZoomModeUi();
   syncZoomQueryParam();
+  syncSourceExpandedUi();
+  syncMmdQueryParam();
   applyOutputHeight(lastOutputContentHeight);
   setStatus("Carregando diagrama…", "muted");
   els.outputError.hidden = true;
@@ -902,7 +1264,11 @@ async function bootOutput(param, title = "") {
     const code = await decompressFromParam(param);
     lastOutputCode = code;
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await renderInFrame(els.outputFrame, code, { expand: zoomModeEnabled });
+    await renderInFrame(els.outputFrame, code, {
+      expand: zoomModeEnabled,
+      view: zoomView,
+      theme: diagramTheme,
+    });
     showOutputSource(code);
     setStatus("", "muted");
 
@@ -916,6 +1282,11 @@ async function bootOutput(param, title = "") {
     if (els.btnZoomMode) {
       els.btnZoomMode.onclick = () => {
         toggleZoomMode();
+      };
+    }
+    if (els.btnToggleSource) {
+      els.btnToggleSource.onclick = () => {
+        toggleSourceExpanded();
       };
     }
     if (els.btnCopySource) {
@@ -933,13 +1304,34 @@ async function bootOutput(param, title = "") {
   }
 }
 
+function onThemeChanged() {
+  diagramTheme = normalizeTheme(els.selTheme?.value);
+  syncThemeSelect();
+  invalidateUrlPreview();
+  if (isAutoEnabled() && editorHasCode()) {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => {
+      if (!isAutoEnabled()) return;
+      void renderPreview(getEditorValue());
+      void refreshUrlPreview({ quiet: true });
+    }, AUTO_DEBOUNCE_MIN_MS);
+    return;
+  }
+  if (editorHasCode()) {
+    void renderPreview(getEditorValue());
+  }
+}
+
 async function bootInput(initialCode, initialTitle) {
   showView("input");
   document.title = "Mermaid Share";
+  document.body.dataset.zoom = "off";
 
   const draft = initialCode ?? sessionStorage.getItem(DRAFT_KEY) ?? "";
   restoreAutoPreference();
   restoreTitle(initialTitle);
+  syncThemeSelect();
+  syncEditorShareControls();
 
   if (!editor) {
     editor = createMermaidEditor({
@@ -967,6 +1359,18 @@ async function bootInput(initialCode, initialTitle) {
 
     els.titleInput?.addEventListener("input", () => {
       onTitleChanged();
+    });
+
+    els.selTheme?.addEventListener("change", () => {
+      onThemeChanged();
+    });
+
+    els.chkZoomPreview?.addEventListener("change", () => {
+      onPreviewZoomChanged();
+    });
+
+    els.chkShowMmd?.addEventListener("change", () => {
+      onShowMmdChanged();
     });
 
     els.chkAuto?.addEventListener("change", () => {
@@ -1015,6 +1419,9 @@ async function boot() {
   const diagramParam = params.get("d");
   const titleParam = params.get("t") || "";
   zoomModeEnabled = parseZoomParam(params);
+  zoomView = parseZoomView(params);
+  diagramTheme = parseThemeParam(params);
+  sourceExpanded = parseMmdParam(params);
 
   if (diagramParam) {
     await bootOutput(diagramParam, titleParam);

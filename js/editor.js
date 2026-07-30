@@ -164,6 +164,68 @@ const editorTheme = EditorView.theme({
   },
 });
 
+const viewerTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    fontSize: "0.8rem",
+    backgroundColor: "#fff",
+  },
+  ".cm-scroller": {
+    fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+    lineHeight: "1.5",
+    overflow: "auto",
+  },
+  ".cm-content": {
+    padding: "0.65rem 0.85rem",
+    caretColor: "transparent",
+  },
+  ".cm-gutters": {
+    display: "none",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "transparent",
+  },
+});
+
+/**
+ * Viewer somente leitura com syntax highlight Mermaid.
+ * @param {object} options
+ * @param {HTMLElement} options.parent
+ * @param {string} [options.doc]
+ */
+export function createMermaidSourceViewer({ parent, doc = "" }) {
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      extensions: [
+        mermaidLanguage,
+        syntaxHighlighting(mermaidHighlight),
+        viewerTheme,
+        EditorView.lineWrapping,
+        EditorView.editable.of(false),
+        EditorState.readOnly.of(true),
+      ],
+    }),
+  });
+
+  return {
+    getValue() {
+      return view.state.doc.toString();
+    },
+    setValue(value) {
+      const next = value ?? "";
+      if (next === view.state.doc.toString()) return;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: next },
+      });
+    },
+    destroy() {
+      view.destroy();
+    },
+  };
+}
+
 /**
  * @param {object} options
  * @param {HTMLElement} options.parent

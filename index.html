@@ -64,9 +64,15 @@
               cada alteração.
             </li>
             <li>
-              (Opcional) Defina um <strong>título</strong> na barra inferior —
-              ele entra na URL como <code>?t=</code> e aparece acima do
-              diagrama na visualização final.
+              (Opcional) Defina um <strong>título</strong> ao lado de
+              “Código Mermaid” — ele entra na URL como <code>?t=</code> e
+              aparece acima do diagrama na visualização final.
+            </li>
+            <li>
+              (Opcional) No preview, escolha o <strong>tema</strong>
+              (<code>?th=</code>), ligue o <strong>modo zoom</strong>
+              (<code>?z=</code>) e, se quiser, <strong>Mostrar código mmd</strong>
+              (<code>?mmd=show</code>).
             </li>
             <li>
               Clique em <strong>Gerar URL</strong> (ou deixe o modo auto fazer
@@ -75,11 +81,12 @@
               para compartilhar.
             </li>
             <li>
-              Na página compartilhada, o visitante vê o <strong>título</strong>,
-              o <strong>diagrama</strong> e o <strong>código-fonte</strong>, com
-              opções para copiar o código, editar, tela cheia ou
-              <strong>modo zoom</strong> (<code>?z=1</code> ligado /
-              <code>?z=0</code> desligado).
+              Na página compartilhada, o visitante vê o <strong>título</strong>
+              e o <strong>diagrama</strong>, com opções para editar, tela cheia,
+              <strong>modo zoom</strong> (<code>?z=</code>) e
+              <strong>Ver código Mermaid</strong>
+              (<code>?mmd=show</code> / <code>?mmd=hide</code>). O código fica
+              no final da página (quase oculto quando recolhido) para exportação.
             </li>
           </ol>
           <p class="help-note">
@@ -96,7 +103,18 @@
       <div class="input-layout">
         <section class="panel" aria-labelledby="label-editor">
           <div class="panel-label" id="label-editor">
-            Código Mermaid
+            <span class="panel-label-text">Código Mermaid</span>
+            <div class="title-field">
+              <label class="title-field-label" for="diagram-title">Título</label>
+              <input
+                id="diagram-title"
+                class="title-field-input"
+                type="text"
+                maxlength="160"
+                placeholder="Título do diagrama (opcional)"
+                autocomplete="off"
+              />
+            </div>
             <div class="panel-actions">
               <button type="button" id="btn-strip-comments" class="btn-inline">
                 Remover comentários
@@ -122,12 +140,44 @@
             Preview
             <span id="preview-status" class="preview-status" hidden></span>
             <div class="panel-actions">
+              <label class="theme-select" for="sel-theme" title="Tema visual do Mermaid (?th=)">
+                Tema
+                <select id="sel-theme" aria-label="Tema do diagrama">
+                  <option value="neutral" selected>Neutral</option>
+                  <option value="default">Default</option>
+                  <option value="forest">Forest</option>
+                  <option value="dark">Dark</option>
+                  <option value="base">Base</option>
+                  <option value="neo">Neo</option>
+                  <option value="neo-dark">Neo Dark</option>
+                  <option value="redux">Redux</option>
+                  <option value="redux-dark">Redux Dark</option>
+                  <option value="redux-color">Redux Color</option>
+                  <option value="redux-dark-color">Redux Dark Color</option>
+                </select>
+              </label>
+              <label
+                class="auto-mode"
+                for="chk-zoom-preview"
+                title="Ativa zoom/pan no preview e inclui ?z= na URL"
+              >
+                <input type="checkbox" id="chk-zoom-preview" />
+                Modo zoom
+              </label>
+              <label
+                class="auto-mode"
+                for="chk-show-mmd"
+                title="Abre a página compartilhada com o código expandido (?mmd=show)"
+              >
+                <input type="checkbox" id="chk-show-mmd" />
+                Mostrar código mmd
+              </label>
               <label
                 class="auto-mode"
                 for="chk-auto"
                 title="Atualiza preview e URL ao editar"
               >
-                <input type="checkbox" id="chk-auto" />
+                <input type="checkbox" id="chk-auto" checked />
                 Modo auto
               </label>
               <button type="button" id="btn-render-preview" class="btn-inline">
@@ -147,17 +197,6 @@
         </section>
       </div>
       <footer class="input-footer">
-        <div class="footer-title-row">
-          <label class="title-field-label" for="diagram-title">Título</label>
-          <input
-            id="diagram-title"
-            class="title-field-input"
-            type="text"
-            maxlength="160"
-            placeholder="Título do diagrama (opcional)"
-            autocomplete="off"
-          />
-        </div>
         <div class="footer-main">
           <div class="url-preview">
             <div class="url-preview-meta">
@@ -191,28 +230,112 @@
           ></iframe>
           <div id="output-error" class="error-box" hidden></div>
         </div>
-        <section class="output-source" id="output-source" hidden>
-          <div class="output-source-header">
-            <span class="output-source-label">Código Mermaid</span>
-            <button type="button" id="btn-copy-source" class="btn-inline">
-              Copiar código
-            </button>
-          </div>
-          <pre id="output-source-code" class="output-source-code"></pre>
-        </section>
         <div class="output-actions">
           <button
             type="button"
             id="btn-zoom-mode"
+            class="btn-action"
             aria-pressed="false"
-            title="Ativa ou desativa zoom, pan e viewport em tela cheia (?z=)"
+            title="Modo zoom: desligado"
+            aria-label="Modo zoom: desligado"
           >
-            Modo zoom: desligado
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"></circle>
+              <path d="m21 21-4.35-4.35"></path>
+              <path class="icon-zoom-plus" d="M11 8v6M8 11h6"></path>
+            </svg>
+            <span class="btn-label">Zoom desligado</span>
           </button>
-          <button type="button" id="btn-fullscreen">Ver em tela cheia</button>
-          <button type="button" id="btn-edit">Editar</button>
-          <button type="button" id="btn-open-output">Abrir em nova guia</button>
+          <button
+            type="button"
+            id="btn-fullscreen"
+            class="btn-action"
+            title="Ver em tela cheia"
+            aria-label="Ver em tela cheia"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
+              <path d="M16 3h3a2 2 0 0 1 2 2v3"></path>
+              <path d="M8 21H5a2 2 0 0 1-2-2v-3"></path>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+            </svg>
+            <span class="btn-label">Tela cheia</span>
+          </button>
+          <button
+            type="button"
+            id="btn-edit"
+            class="btn-action"
+            title="Editar"
+            aria-label="Editar"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+            </svg>
+            <span class="btn-label">Editar</span>
+          </button>
+          <button
+            type="button"
+            id="btn-open-output"
+            class="btn-action"
+            title="Abrir em nova guia"
+            aria-label="Abrir em nova guia"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 3h6v6"></path>
+              <path d="M10 14 21 3"></path>
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            </svg>
+            <span class="btn-label">Nova guia</span>
+          </button>
+          <button
+            type="button"
+            id="btn-toggle-source"
+            class="btn-action"
+            aria-pressed="false"
+            aria-controls="output-source"
+            title="Mostrar ou ocultar o código Mermaid (?mmd=)"
+            aria-label="Ver código Mermaid"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 18 22 12 16 6"></path>
+              <path d="M8 6 2 12 8 18"></path>
+            </svg>
+            <span class="btn-label">Ver código Mermaid</span>
+          </button>
+          <button
+            type="button"
+            id="btn-copy-source"
+            class="btn-action"
+            title="Copiar código"
+            aria-label="Copiar código"
+          >
+            <svg class="icon-copy" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <svg class="icon-check" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6 9 17l-5-5"></path>
+            </svg>
+            <span class="btn-label">Copiar código</span>
+          </button>
         </div>
+        <section
+          class="output-source"
+          id="output-source"
+          data-mmd="hide"
+          hidden
+          aria-label="Código Mermaid"
+        >
+          <div id="output-source-viewer" class="output-source-viewer"></div>
+          <textarea
+            id="output-source-code"
+            class="output-source-code"
+            readonly
+            spellcheck="false"
+            aria-label="Código-fonte Mermaid"
+          ></textarea>
+        </section>
       </div>
     </main>
 
