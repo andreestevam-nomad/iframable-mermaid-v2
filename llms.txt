@@ -1,0 +1,112 @@
+# Mermaid Share — llms.txt
+
+> Guia técnico para LLMs/agentes que precisem entender ou operar este projeto
+> (ex.: gerar uma URL compartilhável a partir de um diagrama Mermaid, ou
+> decodificar uma URL existente para extrair o diagrama).
+
+## O que é este projeto
+
+App estático (sem backend) que permite escrever um diagrama Mermaid, gerar uma
+URL que carrega o diagrama compactado na própria query string, e compartilhar
+essa URL. Quem abre a URL vê o diagrama renderizado direto, sem precisar de
+servidor, banco de dados ou storage externo — todo o estado vive na URL.
+
+## Arquitetura
+
+- `index.html` — página única com duas "views" (`#view-input` e
+  `#view-output`), alternadas via `js/app.js` conforme a URL tem ou não o
+  parâmetro `d`.
+  - **Sem `d`**: modo edição — editor CodeMirror (`js/editor.js`) + preview.
+  - **Com `d`**: modo visualização — decodifica `d`, renderiza o diagrama.
+- `renderer.html` — carregado dentro de um `<iframe sandbox="allow-scripts">`
+  (tanto no preview do editor quanto na visualização). Importa `mermaid` via
+  CDN (`https://cdn.jsdelivr.net/npm/mermaid@.../+esm`) e faz o render real do
+  SVG. Comunicação com a página principal via `postMessage`
+  (`render`, `parse`, `export-png`, `set-zoom-mode`, `set-view`, etc.).
+- `js/compress.js` — compacta/descompacta o texto Mermaid para a query string.
+  Pipeline: `UTF-8 bytes → CompressionStream("deflate-raw") → base64url`
+  (e o inverso com `DecompressionStream`).
+- `js/app.js` — orquestra tudo: estado da URL, comunicação com o iframe,
+  exportações (PNG, `.mmd`, Excalidraw), toggles de tema/zoom/etc.
+- `js/mermaid-text.js` — utilitários de texto (remover comentários, formatar,
+  minificar o código Mermaid no editor).
+
+## Parâmetros de query da URL compartilhada
+
+| Param  | Significado                                                              | Default   |
+|--------|---------------------------------------------------------------------------|-----------|
+| `d`    | Diagrama Mermaid compactado (base64url de deflate-raw). Obrigatório para abrir em modo visualização. | — |
+| `t`    | Título opcional exibido acima do diagrama.                               | ausente   |
+| `th`   | Tema Mermaid (`neutral`, `default`, `forest`, `dark`, `base`, `neo`, `neo-dark`, `redux`, `redux-dark`, `redux-color`, `redux-dark-color`). | `neutral` (omitido na URL quando é o default) |
+| `z`    | Modo zoom/pan (`1` liga). Quando ligado, o diagrama fica com pan/zoom interativo em vez de fluir na página. | `0`/ausente |
+| `zs`, `zx`, `zy` | Escala e centro (x, y) do zoom, em coordenadas do diagrama. Só relevantes com `z=1`. | — |
+| `mmd`  | `show` expande a seção de código-fonte Mermaid abaixo do diagrama; `hide`/ausente mantém recolhida. | `hide` |
+| `only` | `1` esconde a barra de botões e a seção de código-fonte na página compartilhada, deixando só título + diagrama. | `0`/ausente |
+| `raw`  | `1` faz a página devolver **apenas o texto puro do código Mermaid** (sem HTML/CSS/JS visível), útil para consumo programático. Precisa de `d`. | ausente |
+
+## Passo a passo: construir uma URL a partir de um diagrama
+
+1. Tenha o texto do diagrama Mermaid, por exemplo:
+   ```
+   graph TD; A-->B; B-->C;
+   ```
+2. Codifique em UTF-8 e comprima com `deflate-raw`
+   (`CompressionStream("deflate-raw")` no browser, ou `zlib.deflateRawSync`
+   em Node/qualquer runtime com deflate raw disponível).
+3. Codifique os bytes comprimidos em base64, depois converta para base64url
+   (`+` → `-`, `/` → `_`, remova o padding `=`).
+4. Monte a URL:
+   ```
+   https://<host>/<path>/?d=<base64url>&t=<titulo-opcional>&th=<tema-opcional>
+   ```
+   - `t` deve ser URL-encoded se tiver espaços/acentos.
+   - Omita `th` se for `neutral` (é o default).
+   - Adicione `only=1` para uma versão "somente diagrama".
+   - Adicione `raw=1` (mantendo `d`) para obter o código-fonte como texto puro
+     em vez da página renderizada — útil quando um agente só precisa ler o
+     Mermaid de volta sem re-renderizar nada.
+5. Host de referência usado pela própria app para gerar links:
+   `https://andreestevam-nomad.github.io/iframable-mermaid-v2/`.
+
+Equivalente em pseudo-código (o mesmo que `js/compress.js:compressToParam`):
+```js
+const bytes = new TextEncoder().encode(diagramText);
+const compressed = await deflateRaw(bytes); // deflate-raw, sem zlib header
+const b64url = base64(compressed).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const url = `${baseUrl}?d=${b64url}`;
+```
+
+## Passo a passo: decodificar uma URL para obter o diagrama
+
+1. Extraia o valor do parâmetro `d` da query string.
+2. Se só precisar do texto e não da renderização: peça a mesma URL com
+   `&raw=1` adicionado — a resposta será o texto puro do diagrama Mermaid,
+   sem precisar implementar a descompressão por conta própria.
+3. Para decodificar manualmente (equivalente a
+   `js/compress.js:decompressFromParam`):
+   ```js
+   function base64UrlToBytes(value) {
+     const padded = value.replace(/-/g, "+").replace(/_/g, "/")
+       .padEnd(Math.ceil(value.length / 4) * 4, "=");
+     const binary = atob(padded);
+     return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+   }
+   const compressed = base64UrlToBytes(dParam);
+   const bytes = await inflateRaw(compressed); // deflate-raw, sem zlib header
+   const diagramText = new TextDecoder().decode(bytes);
+   ```
+4. Os demais parâmetros (`t`, `th`, `z`/`zs`/`zx`/`zy`, `mmd`, `only`) são
+   metadados de apresentação — não afetam o conteúdo do diagrama, só como ele
+   é exibido.
+
+## Notas
+
+- Não há backend, banco de dados ou API: todo o estado do diagrama vive
+  comprimido na própria URL. Não há limite de "diagramas salvos" — cada URL é
+  autocontida.
+- URLs muito longas (diagramas grandes) podem ser truncadas por alguns
+  clientes; o próprio editor avisa quando a URL passa de ~7500 caracteres
+  (`URL_WARN_THRESHOLD` em `js/compress.js`).
+- Exportações auxiliares disponíveis na UI (não fazem parte do formato de
+  URL): PNG (rasterização do SVG renderizado), `.mmd` (texto-fonte bruto) e
+  `.excalidraw` (via `@excalidraw/mermaid-to-excalidraw`, client-side).

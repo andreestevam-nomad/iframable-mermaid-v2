@@ -16,6 +16,8 @@ const URL_DISPLAY_MAX = 160;
 const RENDER_TIMEOUT_MS = 30000;
 const BOOT_AUTO_MAX_CHARS = 3000;
 const RENDERER_SRC = new URL("../renderer.html", import.meta.url).href;
+const MERMAID_TO_EXCALIDRAW_SRC =
+  "https://esm.sh/@excalidraw/mermaid-to-excalidraw@1.1.4";
 const IFRAME_TARGET = "*";
 /** Origem canônica das URLs compartilháveis (evita localhost no link). */
 const PUBLIC_SHARE_ORIGIN = "https://andreestevam-nomad.github.io";
@@ -44,6 +46,10 @@ const MERMAID_THEMES = new Set([
 ]);
 /** Query param do painel de código (`mmd=show` expandido, `mmd=hide`/ausente recolhido). */
 const MMD_PARAM = "mmd";
+/** Query param do modo minimalista na view compartilhada (`only=1` esconde botões/código). */
+const ONLY_PARAM = "only";
+/** Query param que retorna o código Mermaid como texto puro, sem a UI (`raw=1`). */
+const RAW_PARAM = "raw";
 
 const views = {
   input: document.getElementById("view-input"),
@@ -59,6 +65,19 @@ const els = {
   chkAuto: document.getElementById("chk-auto"),
   chkZoomPreview: document.getElementById("chk-zoom-preview"),
   chkShowMmd: document.getElementById("chk-show-mmd"),
+  chkDiagramOnly: document.getElementById("chk-diagram-only"),
+  btnExportPreviewPng: document.getElementById("btn-export-preview-png"),
+  btnExportPreviewMmd: document.getElementById("btn-export-preview-mmd"),
+  btnExportOutputPng: document.getElementById("btn-export-output-png"),
+  btnExportOutputMmd: document.getElementById("btn-export-output-mmd"),
+  btnRawSource: document.getElementById("btn-raw-source"),
+  btnExportPreviewExcalidraw: document.getElementById(
+    "btn-export-preview-excalidraw",
+  ),
+  btnExportOutputExcalidraw: document.getElementById(
+    "btn-export-output-excalidraw",
+  ),
+  outputActions: document.querySelector(".output-actions"),
   status: document.getElementById("status"),
   titleInput: document.getElementById("diagram-title"),
   btnGenerateUrl: document.getElementById("btn-generate-url"),
@@ -99,6 +118,7 @@ let cachedShareTitle = "";
 let cachedShareTheme = "";
 let cachedShareZoom = false;
 let cachedShareMmd = false;
+let cachedShareOnly = false;
 let cachedShareViewKey = "";
 let urlEpoch = -1;
 let urlBusy = false;
@@ -124,6 +144,9 @@ let previewZoomEnabled = false;
 /** @type {{ scale: number, cx: number, cy: number } | null} */
 let previewZoomView = null;
 let shareShowMmd = false;
+/** Página compartilhada mostra só título + diagrama, sem botões/código (`?only=1`). */
+let onlyDiagram = false;
+let shareOnlyDiagram = false;
 
 /** @type {WeakMap<HTMLIFrameElement, Promise<void>>} */
 const readyMap = new WeakMap();
@@ -315,6 +338,33 @@ function syncMmdQueryParam() {
   }
 }
 
+function parseOnlyParam(params = new URLSearchParams(window.location.search)) {
+  const raw = params.get(ONLY_PARAM);
+  if (raw == null || raw === "") return false;
+  const value = String(raw).trim().toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
+
+function syncOnlyQueryParam() {
+  if (views.output.hidden) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set(ONLY_PARAM, onlyDiagram ? "1" : "0");
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next !== current) {
+    window.history.replaceState({}, "", next);
+  }
+}
+
+function applyOnlyDiagramUi() {
+  if (els.outputActions) {
+    els.outputActions.hidden = onlyDiagram;
+  }
+  if (els.outputSource && !els.outputSource.hidden) {
+    els.outputSource.hidden = onlyDiagram;
+  }
+}
+
 function ensureSourceViewer() {
   if (sourceViewer || !els.outputSourceViewer) return;
   sourceViewer = createMermaidSourceViewer({
@@ -371,6 +421,7 @@ function buildShareUrl(
     view = null,
     theme = diagramTheme,
     mmd = false,
+    only = false,
   } = {},
 ) {
   const url = getShareBaseUrl();
@@ -400,6 +451,10 @@ function buildShareUrl(
   if (mmd) {
     url.searchParams.set(MMD_PARAM, "show");
   }
+  // Padrão desligado: só inclui only=1 quando marcado no editor.
+  if (only) {
+    url.searchParams.set(ONLY_PARAM, "1");
+  }
   return url.toString();
 }
 
@@ -409,6 +464,9 @@ function syncEditorShareControls() {
   }
   if (els.chkShowMmd) {
     els.chkShowMmd.checked = shareShowMmd;
+  }
+  if (els.chkDiagramOnly) {
+    els.chkDiagramOnly.checked = shareOnlyDiagram;
   }
   document.body.dataset.previewZoom = previewZoomEnabled ? "on" : "off";
 }
@@ -455,6 +513,12 @@ function onPreviewZoomChanged() {
 
 function onShowMmdChanged() {
   shareShowMmd = Boolean(els.chkShowMmd?.checked);
+  syncEditorShareControls();
+  scheduleShareUrlRefresh();
+}
+
+function onDiagramOnlyChanged() {
+  shareOnlyDiagram = Boolean(els.chkDiagramOnly?.checked);
   syncEditorShareControls();
   scheduleShareUrlRefresh();
 }
@@ -709,6 +773,175 @@ async function parseInPreview(code) {
   });
 }
 
+function requestPngExport(iframe) {
+  return ensureRenderer(iframe).then(
+    () =>
+      new Promise((resolve, reject) => {
+        const requestId = ++requestSeq;
+        const timer = window.setTimeout(() => {
+          pending.delete(requestId);
+          reject(new Error("Timeout ao exportar PNG."));
+        }, RENDER_TIMEOUT_MS);
+
+        pending.set(requestId, {
+          resolve,
+          reject,
+          iframe,
+          timer,
+          kind: "export-png",
+        });
+
+        try {
+          postToRenderer(iframe, { type: "export-png", requestId });
+        } catch (error) {
+          window.clearTimeout(timer);
+          pending.delete(requestId);
+          reject(error);
+        }
+      }),
+  );
+}
+
+function sanitizeFilenameBase(title) {
+  const clean = String(title || "").trim();
+  if (!clean) return "diagrama-mermaid";
+  return (
+    clean
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "diagrama-mermaid"
+  );
+}
+
+function triggerDownload(href, filename) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function downloadDataUrl(dataUrl, filename) {
+  triggerDownload(dataUrl, filename);
+}
+
+function downloadText(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    triggerDownload(url, filename);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+async function exportPreviewPng() {
+  try {
+    if (!lastPreviewCode || !String(lastPreviewCode).trim()) {
+      setStatus("Renderize o preview antes de salvar o PNG.", "warn");
+      return;
+    }
+    const { dataUrl } = await requestPngExport(els.previewFrame);
+    downloadDataUrl(dataUrl, `${sanitizeFilenameBase(getDiagramTitle())}.png`);
+    setStatus("PNG salvo.", "ok");
+  } catch (error) {
+    setStatus(error?.message || String(error), "error");
+  }
+}
+
+function exportPreviewMmd() {
+  const code = getEditorValue();
+  if (!code.trim()) {
+    setStatus("Nenhum código para salvar.", "warn");
+    return;
+  }
+  downloadText(code, `${sanitizeFilenameBase(getDiagramTitle())}.mmd`);
+  setStatus(".mmd salvo.", "ok");
+}
+
+async function exportOutputPng() {
+  try {
+    if (!lastOutputCode) {
+      setStatus("Nenhum diagrama renderizado.", "warn");
+      return;
+    }
+    const { dataUrl } = await requestPngExport(els.outputFrame);
+    const title = els.outputTitle?.hidden ? "" : els.outputTitle?.textContent;
+    downloadDataUrl(dataUrl, `${sanitizeFilenameBase(title)}.png`);
+    setStatus("PNG salvo.", "ok");
+  } catch (error) {
+    setStatus(error?.message || String(error), "error");
+  }
+}
+
+function exportOutputMmd() {
+  const code = lastOutputCode || els.outputSourceCode?.value || "";
+  if (!code.trim()) {
+    setStatus("Nenhum código para salvar.", "warn");
+    return;
+  }
+  const title = els.outputTitle?.hidden ? "" : els.outputTitle?.textContent;
+  downloadText(code, `${sanitizeFilenameBase(title)}.mmd`);
+  setStatus(".mmd salvo.", "ok");
+}
+
+/** @type {Promise<{parseMermaidToExcalidraw: Function}> | null} */
+let mermaidToExcalidrawModule = null;
+
+function loadMermaidToExcalidraw() {
+  if (!mermaidToExcalidrawModule) {
+    mermaidToExcalidrawModule = import(MERMAID_TO_EXCALIDRAW_SRC);
+  }
+  return mermaidToExcalidrawModule;
+}
+
+async function exportAsExcalidraw(code, filenameBase) {
+  const trimmed = String(code || "").trim();
+  if (!trimmed) {
+    setStatus("Nenhum código para converter.", "warn");
+    return;
+  }
+  setStatus("Convertendo para Excalidraw…", "muted");
+  try {
+    const { parseMermaidToExcalidraw } = await loadMermaidToExcalidraw();
+    const { elements, files } = await parseMermaidToExcalidraw(trimmed);
+    const doc = {
+      type: "excalidraw",
+      version: 2,
+      source: "https://excalidraw.com",
+      elements,
+      appState: {},
+      files: files || {},
+    };
+    downloadText(JSON.stringify(doc), `${filenameBase}.excalidraw`);
+    setStatus("Excalidraw salvo.", "ok");
+  } catch (error) {
+    setStatus(error?.message || String(error), "error");
+  }
+}
+
+function exportPreviewExcalidraw() {
+  return exportAsExcalidraw(
+    getEditorValue(),
+    sanitizeFilenameBase(getDiagramTitle()),
+  );
+}
+
+function exportOutputExcalidraw() {
+  const code = lastOutputCode || els.outputSourceCode?.value || "";
+  const title = els.outputTitle?.hidden ? "" : els.outputTitle?.textContent;
+  return exportAsExcalidraw(code, sanitizeFilenameBase(title));
+}
+
+function openRawSource() {
+  const url = new URL(window.location.href);
+  url.searchParams.set(RAW_PARAM, "1");
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
 function onRendererMessage(event) {
   if (!isAllowedRendererOrigin(event.origin)) return;
   if (!isFromRenderer(event)) return;
@@ -762,10 +995,24 @@ function onRendererMessage(event) {
     return;
   }
 
+  if (data.type === "png-result") {
+    const entry = pending.get(data.requestId);
+    if (!entry || entry.kind !== "export-png") return;
+    if (event.source !== entry.iframe.contentWindow) return;
+    window.clearTimeout(entry.timer);
+    pending.delete(data.requestId);
+    if (data.ok) {
+      entry.resolve({ dataUrl: data.dataUrl });
+    } else {
+      entry.reject(new Error(data.error || "Falha ao exportar PNG."));
+    }
+    return;
+  }
+
   if (data.type !== "render-result") return;
 
   const entry = pending.get(data.requestId);
-  if (!entry || entry.kind === "parse") return;
+  if (!entry || entry.kind === "parse" || entry.kind === "export-png") return;
   if (event.source !== entry.iframe.contentWindow) return;
 
   window.clearTimeout(entry.timer);
@@ -906,6 +1153,7 @@ function invalidateUrlPreview() {
   cachedShareTheme = "";
   cachedShareZoom = false;
   cachedShareMmd = false;
+  cachedShareOnly = false;
   cachedShareViewKey = "";
   urlEpoch = -1;
 
@@ -959,6 +1207,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareTheme = "";
     cachedShareZoom = false;
     cachedShareMmd = false;
+    cachedShareOnly = false;
     cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(
@@ -988,7 +1237,8 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     const zoom = previewZoomEnabled;
     const view = previewZoomView;
     const mmd = shareShowMmd;
-    const url = buildShareUrl(param, title, { theme, zoom, view, mmd });
+    const only = shareOnlyDiagram;
+    const url = buildShareUrl(param, title, { theme, zoom, view, mmd, only });
     if (seq !== urlSeq) return;
 
     cachedShareUrl = url;
@@ -996,6 +1246,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareTheme = theme;
     cachedShareZoom = zoom;
     cachedShareMmd = mmd;
+    cachedShareOnly = only;
     cachedShareViewKey = zoomViewCacheKey(view);
     urlEpoch = epochAtStart;
     const tone = url.length > URL_WARN_THRESHOLD ? "warn" : "ok";
@@ -1014,6 +1265,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareTheme = "";
     cachedShareZoom = false;
     cachedShareMmd = false;
+    cachedShareOnly = false;
     cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(error?.message || String(error), "erro", "warn");
@@ -1031,6 +1283,7 @@ async function ensureShareUrl() {
     cachedShareTheme === diagramTheme &&
     cachedShareZoom === previewZoomEnabled &&
     cachedShareMmd === shareShowMmd &&
+    cachedShareOnly === shareOnlyDiagram &&
     cachedShareViewKey === zoomViewCacheKey(previewZoomView)
   ) {
     return cachedShareUrl;
@@ -1098,6 +1351,7 @@ function goToEditor(code, title = "") {
   previewZoomEnabled = zoomModeEnabled;
   previewZoomView = zoomView;
   shareShowMmd = sourceExpanded;
+  shareOnlyDiagram = onlyDiagram;
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
@@ -1199,7 +1453,7 @@ function showOutputSource(code) {
   els.outputSourceCode.value = next;
   // Mantém o texto no HTML serializado (export / “salvar página”).
   els.outputSourceCode.textContent = next;
-  els.outputSource.hidden = false;
+  els.outputSource.hidden = onlyDiagram;
   syncSourceExpandedUi();
 }
 
@@ -1253,6 +1507,8 @@ async function bootOutput(param, title = "") {
   syncZoomQueryParam();
   syncSourceExpandedUi();
   syncMmdQueryParam();
+  syncOnlyQueryParam();
+  applyOnlyDiagramUi();
   applyOutputHeight(lastOutputContentHeight);
   setStatus("Carregando diagrama…", "muted");
   els.outputError.hidden = true;
@@ -1292,6 +1548,26 @@ async function bootOutput(param, title = "") {
     if (els.btnCopySource) {
       els.btnCopySource.onclick = () => {
         void copyOutputSource();
+      };
+    }
+    if (els.btnExportOutputPng) {
+      els.btnExportOutputPng.onclick = () => {
+        void exportOutputPng();
+      };
+    }
+    if (els.btnExportOutputMmd) {
+      els.btnExportOutputMmd.onclick = () => {
+        exportOutputMmd();
+      };
+    }
+    if (els.btnRawSource) {
+      els.btnRawSource.onclick = () => {
+        openRawSource();
+      };
+    }
+    if (els.btnExportOutputExcalidraw) {
+      els.btnExportOutputExcalidraw.onclick = () => {
+        void exportOutputExcalidraw();
       };
     }
   } catch (error) {
@@ -1373,6 +1649,10 @@ async function bootInput(initialCode, initialTitle) {
       onShowMmdChanged();
     });
 
+    els.chkDiagramOnly?.addEventListener("change", () => {
+      onDiagramOnlyChanged();
+    });
+
     els.chkAuto?.addEventListener("change", () => {
       persistAutoPreference();
       updatePreviewMode();
@@ -1407,6 +1687,15 @@ async function bootInput(initialCode, initialTitle) {
     els.btnMinify?.addEventListener("click", () => {
       applyEditorTransform(minifyMermaid, "Código minificado");
     });
+    els.btnExportPreviewPng?.addEventListener("click", () => {
+      void exportPreviewPng();
+    });
+    els.btnExportPreviewMmd?.addEventListener("click", () => {
+      exportPreviewMmd();
+    });
+    els.btnExportPreviewExcalidraw?.addEventListener("click", () => {
+      void exportPreviewExcalidraw();
+    });
   }
 
   setStatus("Modo edição.", "muted");
@@ -1414,14 +1703,44 @@ async function bootInput(initialCode, initialTitle) {
   editor.focus();
 }
 
+function parseRawParam(params = new URLSearchParams(window.location.search)) {
+  const raw = params.get(RAW_PARAM);
+  if (raw == null || raw === "") return false;
+  const value = String(raw).trim().toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
+
+async function renderRawView(param) {
+  let text;
+  try {
+    text = await decompressFromParam(param);
+  } catch (error) {
+    text = error?.message || String(error);
+  }
+  try {
+    document.open("text/plain", "replace");
+  } catch {
+    document.open();
+  }
+  document.write(text ?? "");
+  document.close();
+}
+
 async function boot() {
   const params = new URLSearchParams(window.location.search);
   const diagramParam = params.get("d");
   const titleParam = params.get("t") || "";
+
+  if (diagramParam && parseRawParam(params)) {
+    await renderRawView(diagramParam);
+    return;
+  }
+
   zoomModeEnabled = parseZoomParam(params);
   zoomView = parseZoomView(params);
   diagramTheme = parseThemeParam(params);
   sourceExpanded = parseMmdParam(params);
+  onlyDiagram = parseOnlyParam(params);
 
   if (diagramParam) {
     await bootOutput(diagramParam, titleParam);

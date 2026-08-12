@@ -135,9 +135,24 @@
         font-variant-numeric: tabular-nums;
         user-select: none;
       }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     </style>
   </head>
   <body>
+    <a class="sr-only" href="./llms.txt" rel="help">
+      Guia para LLMs/agentes: como este app funciona e como construir ou
+      decodificar uma URL de diagrama Mermaid.
+    </a>
     <div id="viewport">
       <div id="stage">
         <div id="root"><p class="hint">O preview aparece aqui.</p></div>
@@ -672,6 +687,61 @@
         }
       }
 
+      const PNG_EXPORT_SCALE = 2;
+
+      async function exportPng(requestId) {
+        const svg = root.querySelector("svg");
+        if (!svg) {
+          post({
+            type: "png-result",
+            requestId,
+            ok: false,
+            error: "Nenhum diagrama renderizado.",
+          });
+          return;
+        }
+        try {
+          const { width, height } = readSvgSize(svg);
+          const w = width > 0 ? width : svg.clientWidth || 800;
+          const h = height > 0 ? height : svg.clientHeight || 600;
+
+          const clone = svg.cloneNode(true);
+          clone.setAttribute("width", String(w));
+          clone.setAttribute("height", String(h));
+          clone.style.maxWidth = "none";
+          if (!clone.getAttribute("xmlns")) {
+            clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+          }
+          const svgText = new XMLSerializer().serializeToString(clone);
+          const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+
+          const img = new Image();
+          const dataUrl = await new Promise((resolve, reject) => {
+            img.onload = () => {
+              const canvas = document.createElement("canvas");
+              canvas.width = Math.max(1, Math.round(w * PNG_EXPORT_SCALE));
+              canvas.height = Math.max(1, Math.round(h * PNG_EXPORT_SCALE));
+              const ctx = canvas.getContext("2d");
+              ctx.fillStyle = isDarkTheme(currentTheme) ? "#0f1419" : "#ffffff";
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              resolve(canvas.toDataURL("image/png"));
+            };
+            img.onerror = () => reject(new Error("Falha ao rasterizar o SVG."));
+            img.src = svgUrl;
+          });
+
+          post({ type: "png-result", requestId, ok: true, dataUrl });
+        } catch (error) {
+          post({
+            type: "png-result",
+            requestId,
+            ok: false,
+            error: error?.message || String(error),
+          });
+        }
+      }
+
       btnZoomIn.addEventListener("click", (event) => {
         event.stopPropagation();
         zoomBy(ZOOM_STEP);
@@ -769,6 +839,12 @@
 
         if (data.type === "set-zoom-mode") {
           void applyZoomMode(Boolean(data.enabled), data.view);
+          return;
+        }
+
+        if (data.type === "export-png") {
+          const { requestId } = data;
+          void exportPng(requestId);
           return;
         }
 
