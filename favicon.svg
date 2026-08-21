@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Mermaid Share">
+  <rect width="32" height="32" rx="7" fill="#0b6e4f"/>
+  <g fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="10" cy="11" r="2.6" fill="#ffffff"/>
+    <circle cx="22" cy="8" r="2.6" fill="#ffffff"/>
+    <circle cx="22" cy="22" r="2.6" fill="#ffffff"/>
+    <circle cx="10" cy="22" r="2.2" fill="#d9e6df"/>
+    <path d="M12.4 11.8 19.2 9.2"/>
+    <path d="M22 10.6v8.8"/>
+    <path d="M12.1 20.2 19.6 20.2"/>
+    <path d="M11.8 13.4v6.2"/>
+  </g>
+</svg>

@@ -27,8 +27,12 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Inline renderer bundle
+        run: node scripts/inline-renderer-bundle.js
+
       - name: Stage static site
         run: |
+          node scripts/inline-renderer-bundle.js
           mkdir -p _site
           cp index.html renderer.html .nojekyll _site/
           cp -r css js _site/

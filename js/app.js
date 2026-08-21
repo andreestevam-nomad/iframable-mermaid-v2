@@ -4,6 +4,14 @@ import {
   URL_WARN_THRESHOLD,
 } from "./compress.js";
 import { formatMermaid, minifyMermaid, removeComments } from "./mermaid-text.js";
+import { isD3CompatibleDiagram } from "./mermaid-to-graph.js";
+import {
+  compressD3Config,
+  decompressD3Config,
+  normalizeD3Config,
+  parseD3Param,
+} from "./d3-config.js";
+import { bindD3ConfigDialog } from "./d3-config-dialog.js";
 import { createMermaidEditor, createMermaidSourceViewer } from "./editor.js";
 import { log } from "./log.js";
 
@@ -50,6 +58,10 @@ const MMD_PARAM = "mmd";
 const ONLY_PARAM = "only";
 /** Query param que retorna o código Mermaid como texto puro, sem a UI (`raw=1`). */
 const RAW_PARAM = "raw";
+/** Query param do modo D3 force (`d3=1`). */
+const D3_PARAM = "d3";
+/** Query param compactado das configurações D3 (`d3c=`). */
+const D3_CONFIG_PARAM = "d3c";
 
 const views = {
   input: document.getElementById("view-input"),
@@ -66,6 +78,15 @@ const els = {
   chkZoomPreview: document.getElementById("chk-zoom-preview"),
   chkShowMmd: document.getElementById("chk-show-mmd"),
   chkDiagramOnly: document.getElementById("chk-diagram-only"),
+  chkD3Force: document.getElementById("chk-d3-force"),
+  d3ForceOption: document.querySelector(".d3-force-option"),
+  btnD3Config: document.getElementById("btn-d3-config"),
+  btnD3GraphConfig: document.getElementById("btn-d3-graph-config"),
+  d3ConfigDialog: document.getElementById("d3-config-dialog"),
+  btnPreviewSettings: document.getElementById("btn-preview-settings"),
+  previewSettingsDialog: document.getElementById("preview-settings-dialog"),
+  btnPreviewDownload: document.getElementById("btn-preview-download"),
+  previewDownloadMenu: document.getElementById("preview-download-menu"),
   btnExportPreviewPng: document.getElementById("btn-export-preview-png"),
   btnExportPreviewMmd: document.getElementById("btn-export-preview-mmd"),
   btnExportOutputPng: document.getElementById("btn-export-output-png"),
@@ -88,6 +109,8 @@ const els = {
   btnMinify: document.getElementById("btn-minify"),
   urlCharCount: document.getElementById("url-char-count"),
   urlPreviewText: document.getElementById("url-preview-text"),
+  urlLengthMeter: document.querySelector(".url-length-meter"),
+  urlLengthMeterFill: document.getElementById("url-length-meter-fill"),
   outputTitle: document.getElementById("output-title"),
   outputFrame: document.getElementById("output-frame"),
   outputError: document.getElementById("output-error"),
@@ -119,6 +142,8 @@ let cachedShareTheme = "";
 let cachedShareZoom = false;
 let cachedShareMmd = false;
 let cachedShareOnly = false;
+let cachedShareD3 = false;
+let cachedShareD3ConfigKey = "";
 let cachedShareViewKey = "";
 let urlEpoch = -1;
 let urlBusy = false;
@@ -147,6 +172,13 @@ let shareShowMmd = false;
 /** Página compartilhada mostra só título + diagrama, sem botões/código (`?only=1`). */
 let onlyDiagram = false;
 let shareOnlyDiagram = false;
+/** Modo D3 force para graph/flowchart/mindmap. */
+let d3ForceEnabled = false;
+let shareD3Force = false;
+/** @type {import('./d3-config.js').D3Config} */
+let d3Config = normalizeD3Config(null);
+/** @type {ReturnType<typeof bindD3ConfigDialog> | null} */
+let d3ConfigUi = null;
 
 /** @type {WeakMap<HTMLIFrameElement, Promise<void>>} */
 const readyMap = new WeakMap();
@@ -192,11 +224,41 @@ function showView(name) {
   views.input.hidden = name !== "input";
   views.output.hidden = name !== "output";
   document.body.dataset.view = name;
+  if (name !== "output") {
+    syncD3OutputLayout(false);
+  }
 }
 
 function setStatus(message, tone = "muted") {
   els.status.textContent = message;
   els.status.dataset.tone = tone;
+}
+
+function showRenderError(container, message, retryFn) {
+  if (!container) return;
+  container.textContent = "";
+  container.hidden = false;
+
+  const text = document.createElement("span");
+  text.className = "error-box-message";
+  text.textContent = message;
+  container.appendChild(text);
+
+  if (typeof retryFn !== "function") return;
+
+  const retryBtn = document.createElement("button");
+  retryBtn.type = "button";
+  retryBtn.className = "btn-inline error-box-retry";
+  retryBtn.textContent = "Recarregar";
+  retryBtn.onclick = () => {
+    retryBtn.disabled = true;
+    retryBtn.textContent = "Recarregando…";
+    void Promise.resolve(retryFn()).finally(() => {
+      retryBtn.disabled = false;
+      retryBtn.textContent = "Recarregar";
+    });
+  };
+  container.appendChild(retryBtn);
 }
 
 function setPreviewStatus(message) {
@@ -422,6 +484,8 @@ function buildShareUrl(
     theme = diagramTheme,
     mmd = false,
     only = false,
+    d3 = false,
+    d3ConfigParam = "",
   } = {},
 ) {
   const url = getShareBaseUrl();
@@ -455,7 +519,112 @@ function buildShareUrl(
   if (only) {
     url.searchParams.set(ONLY_PARAM, "1");
   }
+  if (d3) {
+    url.searchParams.set(D3_PARAM, "1");
+    if (d3ConfigParam) {
+      url.searchParams.set(D3_CONFIG_PARAM, d3ConfigParam);
+    }
+  }
   return url.toString();
+}
+
+function d3ConfigCacheKey(config = d3Config) {
+  return serializeD3ConfigForCache(normalizeD3Config(config));
+}
+
+function serializeD3ConfigForCache(config) {
+  return JSON.stringify(normalizeD3Config(config));
+}
+
+function isPreviewD3Active(code = getEditorValue()) {
+  return d3ForceEnabled && isD3CompatibleDiagram(code);
+}
+
+function isPreviewExpandEnabled(code = getEditorValue()) {
+  return previewZoomEnabled || isPreviewD3Active(code);
+}
+
+function syncD3ControlsVisibility() {
+  const compatible = isD3CompatibleDiagram(getEditorValue());
+  if (els.d3ForceOption) {
+    els.d3ForceOption.hidden = !compatible;
+  }
+  if (!compatible && d3ForceEnabled) {
+    d3ForceEnabled = false;
+    shareD3Force = false;
+  }
+  if (els.chkD3Force) {
+    els.chkD3Force.checked = d3ForceEnabled;
+  }
+  if (els.btnD3Config) {
+    els.btnD3Config.hidden = !(compatible && d3ForceEnabled);
+  }
+  if (els.btnD3GraphConfig) {
+    els.btnD3GraphConfig.hidden = !(compatible && d3ForceEnabled);
+  }
+  document.body.dataset.d3Force = d3ForceEnabled ? "on" : "off";
+}
+
+function syncD3OutputLayout(enabled = false) {
+  document.body.dataset.d3Output = enabled ? "on" : "off";
+}
+
+function setPreviewDownloadMenuOpen(open) {
+  if (!els.previewDownloadMenu || !els.btnPreviewDownload) return;
+  const next = Boolean(open);
+  els.previewDownloadMenu.hidden = !next;
+  els.btnPreviewDownload.setAttribute("aria-expanded", next ? "true" : "false");
+  els.btnPreviewDownload.classList.toggle("is-open", next);
+}
+
+function closePreviewDownloadMenu() {
+  setPreviewDownloadMenuOpen(false);
+}
+
+function togglePreviewDownloadMenu() {
+  setPreviewDownloadMenuOpen(els.previewDownloadMenu?.hidden !== false);
+}
+
+function openPreviewSettingsDialog() {
+  if (!els.previewSettingsDialog) return;
+  syncD3ControlsVisibility();
+  if (typeof els.previewSettingsDialog.showModal === "function") {
+    els.previewSettingsDialog.showModal();
+  }
+}
+
+function bindPreviewToolbar() {
+  els.btnPreviewSettings?.addEventListener("click", () => {
+    openPreviewSettingsDialog();
+  });
+
+  els.previewSettingsDialog?.addEventListener("click", (event) => {
+    if (event.target === els.previewSettingsDialog) {
+      els.previewSettingsDialog.close();
+    }
+  });
+
+  els.btnPreviewDownload?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePreviewDownloadMenu();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!els.previewDownloadMenu || els.previewDownloadMenu.hidden) return;
+    const target = /** @type {Node | null} */ (event.target);
+    if (target && els.btnPreviewDownload?.contains(target)) return;
+    if (target && els.previewDownloadMenu.contains(target)) {
+      closePreviewDownloadMenu();
+      return;
+    }
+    closePreviewDownloadMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (exitOutputToEditor()) return;
+    closePreviewDownloadMenu();
+  });
 }
 
 function syncEditorShareControls() {
@@ -468,7 +637,11 @@ function syncEditorShareControls() {
   if (els.chkDiagramOnly) {
     els.chkDiagramOnly.checked = shareOnlyDiagram;
   }
-  document.body.dataset.previewZoom = previewZoomEnabled ? "on" : "off";
+  if (els.chkD3Force) {
+    els.chkD3Force.checked = d3ForceEnabled;
+  }
+  syncD3ControlsVisibility();
+  document.body.dataset.previewZoom = isPreviewExpandEnabled() ? "on" : "off";
 }
 
 function scheduleShareUrlRefresh() {
@@ -491,12 +664,18 @@ async function setPreviewZoomMode(enabled) {
   scheduleShareUrlRefresh();
   try {
     await ensureRenderer(els.previewFrame);
+    const effectiveExpand = isPreviewExpandEnabled();
     if (lastPreviewCode != null && String(lastPreviewCode).trim()) {
       postToRenderer(els.previewFrame, {
         type: "set-zoom-mode",
-        enabled: previewZoomEnabled,
+        enabled: effectiveExpand,
         view: previewZoomEnabled ? previewZoomView : null,
       });
+      if (isPreviewD3Active(lastPreviewCode)) {
+        requestAnimationFrame(() => {
+          postToRenderer(els.previewFrame, { type: "fit-view" });
+        });
+      }
       return;
     }
     if (editorHasCode()) {
@@ -521,6 +700,35 @@ function onDiagramOnlyChanged() {
   shareOnlyDiagram = Boolean(els.chkDiagramOnly?.checked);
   syncEditorShareControls();
   scheduleShareUrlRefresh();
+}
+
+function onD3ForceChanged() {
+  const wasEnabled = d3ForceEnabled;
+  d3ForceEnabled = Boolean(els.chkD3Force?.checked);
+  shareD3Force = d3ForceEnabled;
+  if (
+    d3ForceEnabled &&
+    !wasEnabled &&
+    isD3CompatibleDiagram(getEditorValue())
+  ) {
+    previewZoomEnabled = true;
+    if (els.chkZoomPreview) els.chkZoomPreview.checked = true;
+    document.body.dataset.previewZoom = "on";
+  }
+  syncEditorShareControls();
+  scheduleShareUrlRefresh();
+  if (editorHasCode()) {
+    void renderPreview(getEditorValue());
+  }
+}
+
+function onD3ConfigApplied(nextConfig) {
+  d3Config = normalizeD3Config(nextConfig);
+  d3ConfigUi?.setConfig(d3Config);
+  scheduleShareUrlRefresh();
+  if (d3ForceEnabled && editorHasCode()) {
+    void renderPreview(getEditorValue());
+  }
 }
 
 function isAutoEnabled() {
@@ -649,6 +857,10 @@ function applyOutputHeight(contentHeight) {
     els.outputFrame.style.height = "100%";
     return;
   }
+  if (document.body.dataset.d3Output === "on") {
+    els.outputFrame.style.height = "100%";
+    return;
+  }
   if (zoomModeEnabled) {
     els.outputFrame.style.height = `${Math.max(window.innerHeight, 320)}px`;
     return;
@@ -659,7 +871,7 @@ function applyOutputHeight(contentHeight) {
 }
 
 function requestOutputView() {
-  if (!zoomModeEnabled) return;
+  if (!zoomModeEnabled && document.body.dataset.d3Output !== "on") return;
   try {
     if (zoomView) {
       postToRenderer(els.outputFrame, { type: "set-view", view: zoomView });
@@ -698,12 +910,19 @@ function toggleZoomMode() {
 async function renderInFrame(
   iframe,
   code,
-  { expand = false, view = null, theme = diagramTheme } = {},
+  {
+    expand = false,
+    view = null,
+    theme = diagramTheme,
+    useD3 = false,
+    d3Config: nextD3Config = d3Config,
+  } = {},
 ) {
   await ensureRenderer(iframe);
   const requestId = ++requestSeq;
   const nextView = expand ? normalizeZoomView(view) : null;
   const nextTheme = normalizeTheme(theme);
+  const d3Enabled = Boolean(useD3);
 
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -736,6 +955,8 @@ async function renderInFrame(
         expand,
         view: nextView,
         theme: nextTheme,
+        useD3: d3Enabled,
+        d3Config: d3Enabled ? normalizeD3Config(nextD3Config) : null,
       });
     } catch (error) {
       window.clearTimeout(timer);
@@ -948,6 +1169,12 @@ function onRendererMessage(event) {
   const data = event.data;
   if (!data) return;
 
+  if (data.type === "user-escape") {
+    if (event.source !== els.outputFrame?.contentWindow) return;
+    exitOutputToEditor();
+    return;
+  }
+
   if (data.type === "view-changed") {
     const nextView = normalizeZoomView({
       scale: data.scale,
@@ -1024,11 +1251,11 @@ function onRendererMessage(event) {
   }
 
   if (entry.iframe === els.outputFrame) {
-    if (typeof data.height === "number" && !zoomModeEnabled) {
+    if (typeof data.height === "number" && !zoomModeEnabled && document.body.dataset.d3Output !== "on") {
       lastOutputContentHeight = Math.max(120, Math.ceil(data.height));
     }
     applyOutputHeight(data.height);
-    if (zoomModeEnabled) {
+    if (zoomModeEnabled || document.body.dataset.d3Output === "on") {
       requestAnimationFrame(() => requestOutputView());
     }
   }
@@ -1048,10 +1275,17 @@ async function renderPreview(code) {
 
   try {
     await renderInFrame(els.previewFrame, code, {
-      expand: previewZoomEnabled,
+      expand: isPreviewExpandEnabled(code),
       view: previewZoomView,
       theme: diagramTheme,
+      useD3: d3ForceEnabled && isD3CompatibleDiagram(code),
+      d3Config,
     });
+    if (isPreviewD3Active(code)) {
+      requestAnimationFrame(() => {
+        postToRenderer(els.previewFrame, { type: "fit-view" });
+      });
+    }
     lastPreviewCode = code;
     previewEpoch = epochAtStart;
     setPreviewStatus("");
@@ -1061,8 +1295,9 @@ async function renderPreview(code) {
     previewEpoch = -1;
     setPreviewStatus("");
     updatePreviewMode();
-    els.previewError.hidden = false;
-    els.previewError.textContent = error?.message || String(error);
+    showRenderError(els.previewError, error?.message || String(error), () =>
+      renderPreview(code),
+    );
   }
 }
 
@@ -1094,6 +1329,7 @@ function scheduleAutoUpdate({ fromBoot = false } = {}) {
 
 function onEditorContentChanged({ fromBoot = false } = {}) {
   editorEpoch += 1;
+  syncD3ControlsVisibility();
   updatePreviewMode();
   invalidateUrlPreview();
   schedulePersist();
@@ -1136,7 +1372,7 @@ function schedulePersist() {
   }, 400);
 }
 
-function setUrlPreview(text, charLabel, tone = "muted") {
+function setUrlPreview(text, charLabel, tone = "muted", urlLength = 0) {
   if (els.urlPreviewText) {
     els.urlPreviewText.textContent = text;
   }
@@ -1144,6 +1380,35 @@ function setUrlPreview(text, charLabel, tone = "muted") {
     els.urlCharCount.textContent = charLabel;
     els.urlCharCount.dataset.tone = tone;
   }
+  updateUrlLengthMeter(urlLength);
+}
+
+function updateUrlLengthMeter(urlLength) {
+  const meter = els.urlLengthMeter;
+  const fill = els.urlLengthMeterFill;
+  if (!meter || !fill) return;
+
+  const length = Math.max(0, Number(urlLength) || 0);
+  const ratio = Math.min(length / URL_WARN_THRESHOLD, 1);
+  fill.style.width = `${ratio * 100}%`;
+
+  let state = "empty";
+  if (length > URL_WARN_THRESHOLD) {
+    state = "over";
+  } else if (length >= URL_WARN_THRESHOLD * 0.85) {
+    state = "near";
+  } else if (length > 0) {
+    state = "ok";
+  }
+
+  fill.dataset.state = state;
+  meter.dataset.state = state;
+  meter.setAttribute("aria-valuemax", String(URL_WARN_THRESHOLD));
+  meter.setAttribute("aria-valuenow", String(Math.round(length)));
+  meter.setAttribute(
+    "aria-valuetext",
+    `${length} de ${URL_WARN_THRESHOLD} caracteres`,
+  );
 }
 
 function invalidateUrlPreview() {
@@ -1154,6 +1419,8 @@ function invalidateUrlPreview() {
   cachedShareZoom = false;
   cachedShareMmd = false;
   cachedShareOnly = false;
+  cachedShareD3 = false;
+  cachedShareD3ConfigKey = "";
   cachedShareViewKey = "";
   urlEpoch = -1;
 
@@ -1208,6 +1475,8 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareZoom = false;
     cachedShareMmd = false;
     cachedShareOnly = false;
+    cachedShareD3 = false;
+    cachedShareD3ConfigKey = "";
     cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(
@@ -1238,7 +1507,20 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     const view = previewZoomView;
     const mmd = shareShowMmd;
     const only = shareOnlyDiagram;
-    const url = buildShareUrl(param, title, { theme, zoom, view, mmd, only });
+    const d3 = shareD3Force && isD3CompatibleDiagram(source);
+    let d3ConfigParam = "";
+    if (d3) {
+      d3ConfigParam = await compressD3Config(d3Config);
+    }
+    const url = buildShareUrl(param, title, {
+      theme,
+      zoom,
+      view,
+      mmd,
+      only,
+      d3,
+      d3ConfigParam,
+    });
     if (seq !== urlSeq) return;
 
     cachedShareUrl = url;
@@ -1247,6 +1529,8 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareZoom = zoom;
     cachedShareMmd = mmd;
     cachedShareOnly = only;
+    cachedShareD3 = d3;
+    cachedShareD3ConfigKey = d3 ? d3ConfigCacheKey(d3Config) : "";
     cachedShareViewKey = zoomViewCacheKey(view);
     urlEpoch = epochAtStart;
     const tone = url.length > URL_WARN_THRESHOLD ? "warn" : "ok";
@@ -1254,7 +1538,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
       url.length > URL_WARN_THRESHOLD
         ? `${url.length} chars (longa)`
         : `${url.length} chars`;
-    setUrlPreview(truncateUrl(url), label, tone);
+    setUrlPreview(truncateUrl(url), label, tone, url.length);
     if (!quiet) {
       setStatus(`URL gerada (${label}).`, tone === "warn" ? "warn" : "ok");
     }
@@ -1266,6 +1550,8 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareZoom = false;
     cachedShareMmd = false;
     cachedShareOnly = false;
+    cachedShareD3 = false;
+    cachedShareD3ConfigKey = "";
     cachedShareViewKey = "";
     urlEpoch = -1;
     setUrlPreview(error?.message || String(error), "erro", "warn");
@@ -1284,6 +1570,11 @@ async function ensureShareUrl() {
     cachedShareZoom === previewZoomEnabled &&
     cachedShareMmd === shareShowMmd &&
     cachedShareOnly === shareOnlyDiagram &&
+    cachedShareD3 === (shareD3Force && isD3CompatibleDiagram(getEditorValue())) &&
+    cachedShareD3ConfigKey ===
+      (shareD3Force && isD3CompatibleDiagram(getEditorValue())
+        ? d3ConfigCacheKey(d3Config)
+        : "") &&
     cachedShareViewKey === zoomViewCacheKey(previewZoomView)
   ) {
     return cachedShareUrl;
@@ -1341,24 +1632,40 @@ async function openShareInNewTab() {
   }
 }
 
-function goToEditor(code, title = "") {
+function exitOutputToEditor() {
+  if (views.output.hidden || lastOutputCode == null) return false;
+  if (document.querySelector("dialog[open]")) return false;
+  if (document.fullscreenElement) return false;
+  const title = els.outputTitle?.hidden ? "" : els.outputTitle?.textContent || "";
+  void goToEditor(lastOutputCode, title);
+  return true;
+}
+
+async function goToEditor(code, title = "") {
   try {
     sessionStorage.setItem(DRAFT_KEY, code);
     if (title) sessionStorage.setItem(TITLE_KEY, title);
   } catch {
     // ignore
   }
+  const params = new URLSearchParams(window.location.search);
   previewZoomEnabled = zoomModeEnabled;
   previewZoomView = zoomView;
   shareShowMmd = sourceExpanded;
   shareOnlyDiagram = onlyDiagram;
+  d3ForceEnabled = parseD3Param(params);
+  shareD3Force = d3ForceEnabled;
+  const d3ConfigParam = params.get(D3_CONFIG_PARAM);
+  if (d3ConfigParam) {
+    d3Config = await decompressD3Config(d3ConfigParam);
+  }
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
   window.history.pushState({}, "", url.pathname + url.search);
   document.title = "Mermaid Share";
   showView("input");
-  void bootInput(code, title);
+  await bootInput(code, title);
 }
 
 function applyOutputTitle(title) {
@@ -1413,6 +1720,10 @@ function remeasureOutputFrame() {
 function refreshPreviewOnResize() {
   if (views.input.hidden || lastPreviewCode === null) return;
   if (!String(lastPreviewCode).trim()) return;
+  if (isPreviewD3Active(lastPreviewCode)) {
+    refreshD3Layout();
+    return;
+  }
   if (previewZoomEnabled) {
     try {
       if (previewZoomView) {
@@ -1431,11 +1742,47 @@ function refreshPreviewOnResize() {
   void renderPreview(getEditorValue());
 }
 
+let previewLayoutObserver = null;
+
+function bindPreviewLayoutObserver() {
+  const wrap = els.previewFrame?.parentElement;
+  if (!wrap) return;
+  previewLayoutObserver?.disconnect();
+  previewLayoutObserver = new ResizeObserver(() => {
+    if (views.input.hidden || !isPreviewD3Active()) return;
+    refreshD3Layout();
+  });
+  previewLayoutObserver.observe(wrap);
+}
+
+function refreshD3Layout() {
+  for (const iframe of [els.previewFrame, els.outputFrame]) {
+    if (!iframe?.contentWindow) continue;
+    try {
+      postToRenderer(iframe, { type: "fit-view" });
+    } catch {
+      /* iframe indisponível */
+    }
+  }
+}
+
 function scheduleLayoutRefresh() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
+    const d3LayoutActive =
+      document.body.dataset.d3Output === "on" ||
+      (document.body.dataset.d3Force === "on" && !views.input.hidden);
+
     if (!views.output.hidden) {
       applyOutputHeight(lastOutputContentHeight);
+    }
+
+    if (d3LayoutActive) {
+      refreshD3Layout();
+      return;
+    }
+
+    if (!views.output.hidden) {
       if (zoomModeEnabled) {
         requestOutputView();
       } else {
@@ -1501,7 +1848,22 @@ async function copyOutputSource() {
   }
 }
 
-async function bootOutput(param, title = "") {
+async function bootOutput(param, title = "", outputOptions = {}) {
+  const useD3 =
+    outputOptions.useD3 != null
+      ? Boolean(outputOptions.useD3)
+      : parseD3Param(new URLSearchParams(window.location.search));
+  const outputD3Config =
+    outputOptions.d3Config != null
+      ? normalizeD3Config(outputOptions.d3Config)
+      : outputOptions.d3ConfigParam
+        ? await decompressD3Config(outputOptions.d3ConfigParam)
+        : await decompressD3Config(
+            new URLSearchParams(window.location.search).get(D3_CONFIG_PARAM) ||
+              "",
+          );
+  d3ForceEnabled = useD3;
+  d3Config = outputD3Config;
   showView("output");
   syncZoomModeUi();
   syncZoomQueryParam();
@@ -1519,16 +1881,27 @@ async function bootOutput(param, title = "") {
   try {
     const code = await decompressFromParam(param);
     lastOutputCode = code;
+    const d3Compatible = useD3 && isD3CompatibleDiagram(code);
+    syncD3OutputLayout(d3Compatible);
+    if (d3Compatible) {
+      zoomModeEnabled = true;
+      syncZoomModeUi();
+      syncZoomQueryParam();
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
     await renderInFrame(els.outputFrame, code, {
-      expand: zoomModeEnabled,
+      expand: d3Compatible || zoomModeEnabled,
       view: zoomView,
       theme: diagramTheme,
+      useD3: d3Compatible,
+      d3Config: outputD3Config,
     });
     showOutputSource(code);
     setStatus("", "muted");
 
-    els.btnEdit.onclick = () => goToEditor(code, title);
+    els.btnEdit.onclick = () => {
+      void goToEditor(code, title);
+    };
     els.btnOpenOutput.onclick = () => {
       window.open(window.location.href, "_blank", "noopener,noreferrer");
     };
@@ -1573,9 +1946,15 @@ async function bootOutput(param, title = "") {
   } catch (error) {
     lastOutputCode = null;
     hideOutputSource();
-    els.outputError.hidden = false;
-    els.outputError.textContent =
-      error?.message || "Não foi possível decodificar/renderizar o parâmetro d.";
+    showRenderError(
+      els.outputError,
+      error?.message || "Não foi possível decodificar/renderizar o parâmetro d.",
+      () =>
+        bootOutput(param, title, {
+          useD3,
+          d3Config: outputD3Config,
+        }),
+    );
     setStatus("Falha ao carregar diagrama.", "error");
   }
 }
@@ -1608,6 +1987,10 @@ async function bootInput(initialCode, initialTitle) {
   restoreTitle(initialTitle);
   syncThemeSelect();
   syncEditorShareControls();
+  if (!d3ConfigUi && els.d3ConfigDialog) {
+    d3ConfigUi = bindD3ConfigDialog(els.d3ConfigDialog, onD3ConfigApplied);
+  }
+  d3ConfigUi?.setConfig(d3Config);
 
   if (!editor) {
     editor = createMermaidEditor({
@@ -1632,6 +2015,7 @@ async function bootInput(initialCode, initialTitle) {
 
   if (!inputBound) {
     inputBound = true;
+    bindPreviewLayoutObserver();
 
     els.titleInput?.addEventListener("input", () => {
       onTitleChanged();
@@ -1651,6 +2035,19 @@ async function bootInput(initialCode, initialTitle) {
 
     els.chkDiagramOnly?.addEventListener("change", () => {
       onDiagramOnlyChanged();
+    });
+
+    els.chkD3Force?.addEventListener("change", () => {
+      onD3ForceChanged();
+    });
+
+    els.btnD3Config?.addEventListener("click", () => {
+      els.previewSettingsDialog?.close();
+      d3ConfigUi?.open(d3Config);
+    });
+
+    els.btnD3GraphConfig?.addEventListener("click", () => {
+      d3ConfigUi?.open(d3Config);
     });
 
     els.chkAuto?.addEventListener("change", () => {
@@ -1741,9 +2138,17 @@ async function boot() {
   diagramTheme = parseThemeParam(params);
   sourceExpanded = parseMmdParam(params);
   onlyDiagram = parseOnlyParam(params);
+  const outputUseD3 = parseD3Param(params);
+  const outputD3ConfigParam = params.get(D3_CONFIG_PARAM) || "";
+  if (diagramParam && outputUseD3 && !params.has(ZOOM_PARAM)) {
+    zoomModeEnabled = true;
+  }
 
   if (diagramParam) {
-    await bootOutput(diagramParam, titleParam);
+    await bootOutput(diagramParam, titleParam, {
+      useD3: outputUseD3,
+      d3ConfigParam: outputD3ConfigParam,
+    });
   } else {
     await bootInput();
   }
@@ -1775,4 +2180,5 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 bindHelpDialog();
+bindPreviewToolbar();
 void boot();

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mermaid Share</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -59,20 +60,21 @@
               esquerda. O editor destaca a sintaxe e valida o código ao digitar.
             </li>
             <li>
-              Use <strong>Atualizar preview</strong> para ver o resultado, ou
-              ligue o <strong>Modo auto</strong> para atualizar preview e URL a
-              cada alteração.
+              Use o botão de <strong>refresh</strong> no preview para ver o
+              resultado, ou ligue o <strong>Modo auto</strong> para atualizar
+              preview e URL a cada alteração.
+            </li>
+            <li>
+              Em <strong>Configurações</strong> (ícone de engrenagem no preview),
+              ajuste tema, zoom, código mmd, modo “apenas diagrama” e, para
+              <code>graph</code>/<code>flowchart</code>/<code>mindmap</code>,
+              o modo <strong>D3JS Force</strong> (<code>?d3=</code>,
+              <code>?d3c=</code>).
             </li>
             <li>
               (Opcional) Defina um <strong>título</strong> ao lado de
               “Código Mermaid” — ele entra na URL como <code>?t=</code> e
               aparece acima do diagrama na visualização final.
-            </li>
-            <li>
-              (Opcional) No preview, escolha o <strong>tema</strong>
-              (<code>?th=</code>), ligue o <strong>modo zoom</strong>
-              (<code>?z=</code>) e, se quiser, <strong>Mostrar código mmd</strong>
-              (<code>?mmd=show</code>).
             </li>
             <li>
               Clique em <strong>Gerar URL</strong> (ou deixe o modo auto fazer
@@ -96,6 +98,296 @@
             <strong>Minificar</strong> (compacta o texto).
           </p>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="preview-settings-dialog" class="preview-settings-dialog">
+      <form method="dialog" class="preview-settings-dialog-inner">
+        <header class="preview-settings-dialog-header">
+          <h2>Configurações do preview</h2>
+          <button type="submit" class="btn-inline" value="close" aria-label="Fechar">
+            Fechar
+          </button>
+        </header>
+        <div class="preview-settings-dialog-body">
+          <label class="theme-select theme-select-block" for="sel-theme">
+            Tema Mermaid
+            <select id="sel-theme" aria-label="Tema do diagrama">
+              <option value="neutral" selected>Neutral</option>
+              <option value="default">Default</option>
+              <option value="forest">Forest</option>
+              <option value="dark">Dark</option>
+              <option value="base">Base</option>
+              <option value="neo">Neo</option>
+              <option value="neo-dark">Neo Dark</option>
+              <option value="redux">Redux</option>
+              <option value="redux-dark">Redux Dark</option>
+              <option value="redux-color">Redux Color</option>
+              <option value="redux-dark-color">Redux Dark Color</option>
+            </select>
+          </label>
+          <label
+            class="preview-settings-check"
+            for="chk-zoom-preview"
+            title="Ativa zoom/pan no preview e inclui ?z= na URL"
+          >
+            <input type="checkbox" id="chk-zoom-preview" />
+            Modo zoom
+          </label>
+          <label
+            class="preview-settings-check"
+            for="chk-show-mmd"
+            title="Abre a página compartilhada com o código expandido (?mmd=show)"
+          >
+            <input type="checkbox" id="chk-show-mmd" />
+            Mostrar código mmd
+          </label>
+          <label
+            class="preview-settings-check"
+            for="chk-diagram-only"
+            title="Página compartilhada mostra só o título e o diagrama, sem botões (?only=1)"
+          >
+            <input type="checkbox" id="chk-diagram-only" />
+            Mostrar apenas diagrama
+          </label>
+          <label
+            class="preview-settings-check d3-force-option"
+            for="chk-d3-force"
+            hidden
+            title="Renderiza graph/flowchart/mindmap com D3 force (?d3=1)"
+          >
+            <input type="checkbox" id="chk-d3-force" />
+            Usar D3JS Force
+          </label>
+          <button
+            type="button"
+            id="btn-d3-config"
+            class="btn-inline preview-settings-d3-advanced"
+            hidden
+          >
+            Configurações avançadas D3 force…
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d3-config-dialog" class="d3-config-dialog">
+      <form method="dialog" class="d3-config-dialog-inner">
+        <header class="d3-config-dialog-header">
+          <h2>Configurações D3 Force</h2>
+          <button type="submit" class="btn-inline" value="close" aria-label="Fechar">
+            Fechar
+          </button>
+        </header>
+        <div class="d3-config-dialog-body">
+          <fieldset class="d3-config-group">
+            <legend>Comportamento</legend>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-physics-enabled" checked />
+              Física habilitada
+            </label>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-show-playpause" checked />
+              Botão play/pause física visível
+            </label>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-drag-when-paused" checked />
+              Permitir movimentar nós com física pausada
+            </label>
+            <div class="d3-config-radios">
+              <span class="d3-config-radios-label">Interação do mouse</span>
+              <label>
+                <input
+                  type="radio"
+                  name="d3-mouse-mode"
+                  value="drag"
+                  checked
+                />
+                Mouse click para arrastar nós
+              </label>
+              <label>
+                <input type="radio" name="d3-mouse-mode" value="repulsion" />
+                Mouse causa repulsão nos nós
+              </label>
+            </div>
+            <div class="d3-config-radios">
+              <span class="d3-config-radios-label">Exibição dos nós</span>
+              <label>
+                <input
+                  type="radio"
+                  name="d3-node-display"
+                  value="large"
+                  checked
+                />
+                Nós grandes com todo o texto
+              </label>
+              <label>
+                <input type="radio" name="d3-node-display" value="small" />
+                Nós pequenos com texto completo apenas no hover
+              </label>
+              <label>
+                <input type="radio" name="d3-node-display" value="medium" />
+                Nós médios com hint de texto e texto completo no hover
+              </label>
+            </div>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-node-sidebar" />
+              Mouseclick no nó abre barra lateral com texto completo e nós pais/filhos
+            </label>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-auto-line-wrap" />
+              Quebra de linha automática
+            </label>
+            <label class="d3-config-check">
+              <input type="checkbox" id="d3-animate-nodes" />
+              Animar nós
+            </label>
+            <div id="d3-animate-options" class="d3-config-animate-options" hidden>
+              <label class="d3-config-slider">
+                <span class="d3-config-slider-label">Velocidade (intervalo do ciclo, ms)</span>
+                <input
+                  type="range"
+                  id="d3-animate-speed"
+                  min="50"
+                  max="2000"
+                  step="50"
+                  value="300"
+                />
+                <output id="d3-animate-speed-val">300</output>
+              </label>
+              <label class="d3-config-slider">
+                <span class="d3-config-slider-label">Nós simultâneos</span>
+                <input
+                  type="range"
+                  id="d3-animate-concurrent"
+                  min="1"
+                  max="20"
+                  step="1"
+                  value="3"
+                />
+                <output id="d3-animate-concurrent-val">3</output>
+              </label>
+              <label class="d3-config-slider">
+                <span class="d3-config-slider-label">Raio dos nós raiz (% da altura)</span>
+                <input
+                  type="range"
+                  id="d3-animate-root-radius"
+                  min="2"
+                  max="100"
+                  step="1"
+                  value="85"
+                />
+                <output id="d3-animate-root-radius-val">85</output>
+              </label>
+              <label class="d3-config-slider">
+                <span class="d3-config-slider-label">Raio dos filhos (% da largura do pai)</span>
+                <input
+                  type="range"
+                  id="d3-animate-child-radius"
+                  min="5"
+                  max="100"
+                  step="1"
+                  value="50"
+                />
+                <output id="d3-animate-child-radius-val">50</output>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="d3-config-group d3-config-group--sliders">
+            <legend>Física (d3-force)</legend>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Distância dos links</span>
+              <input
+                type="range"
+                id="d3-link-distance"
+                min="10"
+                max="300"
+                step="1"
+                value="30"
+              />
+              <output id="d3-link-distance-val">30</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Força dos links</span>
+              <input
+                type="range"
+                id="d3-link-strength"
+                min="0"
+                max="2"
+                step="0.05"
+                value="1"
+              />
+              <output id="d3-link-strength-val">1</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Carga (repulsão)</span>
+              <input
+                type="range"
+                id="d3-charge-strength"
+                min="-500"
+                max="0"
+                step="5"
+                value="-30"
+              />
+              <output id="d3-charge-strength-val">-30</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Força central</span>
+              <input
+                type="range"
+                id="d3-center-strength"
+                min="0"
+                max="2"
+                step="0.05"
+                value="1"
+              />
+              <output id="d3-center-strength-val">1</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Raio de colisão</span>
+              <input
+                type="range"
+                id="d3-collision-radius"
+                min="0"
+                max="120"
+                step="1"
+                value="0"
+              />
+              <output id="d3-collision-radius-val">0</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Alpha decay</span>
+              <input
+                type="range"
+                id="d3-alpha-decay"
+                min="0.001"
+                max="0.2"
+                step="0.001"
+                value="0.0228"
+              />
+              <output id="d3-alpha-decay-val">0.0228</output>
+            </label>
+            <label class="d3-config-slider">
+              <span class="d3-config-slider-label">Velocity decay</span>
+              <input
+                type="range"
+                id="d3-velocity-decay"
+                min="0.05"
+                max="0.99"
+                step="0.01"
+                value="0.4"
+              />
+              <output id="d3-velocity-decay-val">0.4</output>
+            </label>
+          </fieldset>
+        </div>
+        <footer class="d3-config-dialog-footer">
+          <button type="button" class="btn-inline d3-config-reset">
+            Restaurar padrões
+          </button>
+          <button type="submit" class="primary">Aplicar</button>
+        </footer>
       </form>
     </dialog>
 
@@ -139,47 +431,7 @@
           <div class="panel-label" id="label-preview">
             Preview
             <span id="preview-status" class="preview-status" hidden></span>
-            <div class="panel-actions">
-              <label class="theme-select" for="sel-theme" title="Tema visual do Mermaid (?th=)">
-                Tema
-                <select id="sel-theme" aria-label="Tema do diagrama">
-                  <option value="neutral" selected>Neutral</option>
-                  <option value="default">Default</option>
-                  <option value="forest">Forest</option>
-                  <option value="dark">Dark</option>
-                  <option value="base">Base</option>
-                  <option value="neo">Neo</option>
-                  <option value="neo-dark">Neo Dark</option>
-                  <option value="redux">Redux</option>
-                  <option value="redux-dark">Redux Dark</option>
-                  <option value="redux-color">Redux Color</option>
-                  <option value="redux-dark-color">Redux Dark Color</option>
-                </select>
-              </label>
-              <label
-                class="auto-mode"
-                for="chk-zoom-preview"
-                title="Ativa zoom/pan no preview e inclui ?z= na URL"
-              >
-                <input type="checkbox" id="chk-zoom-preview" />
-                Modo zoom
-              </label>
-              <label
-                class="auto-mode"
-                for="chk-show-mmd"
-                title="Abre a página compartilhada com o código expandido (?mmd=show)"
-              >
-                <input type="checkbox" id="chk-show-mmd" />
-                Mostrar código mmd
-              </label>
-              <label
-                class="auto-mode"
-                for="chk-diagram-only"
-                title="Página compartilhada mostra só o título e o diagrama, sem botões (?only=1)"
-              >
-                <input type="checkbox" id="chk-diagram-only" />
-                Mostrar apenas diagrama
-              </label>
+            <div class="panel-actions preview-toolbar">
               <label
                 class="auto-mode"
                 for="chk-auto"
@@ -188,18 +440,106 @@
                 <input type="checkbox" id="chk-auto" checked />
                 Modo auto
               </label>
-              <button type="button" id="btn-render-preview" class="btn-inline">
-                Atualizar preview
+              <button
+                type="button"
+                id="btn-render-preview"
+                class="btn-icon-text"
+                title="Atualizar preview"
+                aria-label="Atualizar preview"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                  <path d="M21 3v6h-6"></path>
+                </svg>
               </button>
-              <button type="button" id="btn-export-preview-png" class="btn-inline">
-                Salvar PNG
+              <button
+                type="button"
+                id="btn-preview-settings"
+                class="btn-icon-text"
+                title="Configurações do preview"
+                aria-haspopup="dialog"
+                aria-controls="preview-settings-dialog"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z"
+                  ></path>
+                  <path
+                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+                  ></path>
+                </svg>
+                Configurações
               </button>
-              <button type="button" id="btn-export-preview-mmd" class="btn-inline">
-                Salvar .mmd
+              <button
+                type="button"
+                id="btn-d3-graph-config"
+                class="btn-icon-text"
+                hidden
+                title="Configurações do grafo D3 force"
+                aria-haspopup="dialog"
+                aria-controls="d3-config-dialog"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="6" cy="6" r="2.5"></circle>
+                  <circle cx="18" cy="6" r="2.5"></circle>
+                  <circle cx="12" cy="18" r="2.5"></circle>
+                  <path d="M8.2 7.5 10.8 16"></path>
+                  <path d="M15.8 7.5 13.2 16"></path>
+                  <path d="M7.8 6.8 16.2 6.8"></path>
+                </svg>
+                Configurações do Grafo
               </button>
-              <button type="button" id="btn-export-preview-excalidraw" class="btn-inline">
-                Baixar Excalidraw
-              </button>
+              <div class="preview-download-menu">
+                <button
+                  type="button"
+                  id="btn-preview-download"
+                  class="btn-icon-text"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                  aria-controls="preview-download-menu"
+                  title="Baixar preview"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3v12"></path>
+                    <path d="m7 10 5 5 5-5"></path>
+                    <path d="M5 21h14"></path>
+                  </svg>
+                  <svg class="icon-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 9 6 6 6-6"></path>
+                  </svg>
+                </button>
+                <div
+                  id="preview-download-menu"
+                  class="preview-menu"
+                  role="menu"
+                  hidden
+                >
+                  <button
+                    type="button"
+                    id="btn-export-preview-png"
+                    class="preview-menu-item"
+                    role="menuitem"
+                  >
+                    Salvar PNG
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-export-preview-mmd"
+                    class="preview-menu-item"
+                    role="menuitem"
+                  >
+                    Salvar .mmd
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-export-preview-excalidraw"
+                    class="preview-menu-item"
+                    role="menuitem"
+                  >
+                    Baixar Excalidraw
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="preview-wrap">
@@ -207,7 +547,7 @@
               id="preview-frame"
               class="render-frame"
               title="Preview Mermaid"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-same-origin"
             ></iframe>
           </div>
           <div id="preview-error" class="error-box" hidden></div>
@@ -223,6 +563,17 @@
             <code id="url-preview-text" class="url-preview-text"
               >Clique em “Gerar URL” após colar o diagrama.</code
             >
+            <div
+              class="url-length-meter"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="7500"
+              aria-valuenow="0"
+              aria-label="Tamanho da URL em relação ao limite seguro"
+              title="Limite de aviso: 7500 caracteres (URL Too long em alguns apps)"
+            >
+              <div id="url-length-meter-fill" class="url-length-meter-fill"></div>
+            </div>
           </div>
           <div class="actions">
             <button type="button" class="primary" id="btn-generate-url">
@@ -243,7 +594,7 @@
             id="output-frame"
             class="render-frame output-frame"
             title="Diagrama Mermaid"
-            sandbox="allow-scripts"
+            sandbox="allow-scripts allow-same-origin"
           ></iframe>
           <div id="output-error" class="error-box" hidden></div>
         </div>

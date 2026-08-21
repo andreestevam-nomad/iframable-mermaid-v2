@@ -18,16 +18,24 @@ servidor, banco de dados ou storage externo — todo o estado vive na URL.
   parâmetro `d`.
   - **Sem `d`**: modo edição — editor CodeMirror (`js/editor.js`) + preview.
   - **Com `d`**: modo visualização — decodifica `d`, renderiza o diagrama.
-- `renderer.html` — carregado dentro de um `<iframe sandbox="allow-scripts">`
+- `renderer.html` — carregado dentro de um `<iframe sandbox="allow-scripts allow-same-origin">`
   (tanto no preview do editor quanto na visualização). Importa `mermaid` via
-  CDN (`https://cdn.jsdelivr.net/npm/mermaid@.../+esm`) e faz o render real do
-  SVG. Comunicação com a página principal via `postMessage`
+  CDN e módulos locais (`js/d3-force-renderer.js`, etc.). O iframe usa
+  `sandbox="allow-scripts allow-same-origin"` para permitir imports locais.
+  Comunicação com a página principal via `postMessage`
   (`render`, `parse`, `export-png`, `set-zoom-mode`, `set-view`, etc.).
+  Quando `useD3` está ativo, usa `js/d3-force-renderer.js` (D3 v7) em vez de
+  Mermaid para renderizar grafos com simulação física.
 - `js/compress.js` — compacta/descompacta o texto Mermaid para a query string.
   Pipeline: `UTF-8 bytes → CompressionStream("deflate-raw") → base64url`
-  (e o inverso com `DecompressionStream`).
+  (e o inverso com `DecompressionStream`). O mesmo pipeline é reutilizado para
+  `d3c` (configurações D3).
+- `js/mermaid-to-graph.js` — converte diagramas `graph`, `flowchart` ou
+  `mindmap` em `{ nodes, links }` para o renderizador D3.
+- `js/d3-config.js` — defaults, normalização e serialização compactada das
+  configurações D3 force (física, interação do mouse, exibição de nós, etc.).
 - `js/app.js` — orquestra tudo: estado da URL, comunicação com o iframe,
-  exportações (PNG, `.mmd`, Excalidraw), toggles de tema/zoom/etc.
+  exportações (PNG, `.mmd`, Excalidraw), toggles de tema/zoom/D3/etc.
 - `js/mermaid-text.js` — utilitários de texto (remover comentários, formatar,
   minificar o código Mermaid no editor).
 
@@ -42,7 +50,24 @@ servidor, banco de dados ou storage externo — todo o estado vive na URL.
 | `zs`, `zx`, `zy` | Escala e centro (x, y) do zoom, em coordenadas do diagrama. Só relevantes com `z=1`. | — |
 | `mmd`  | `show` expande a seção de código-fonte Mermaid abaixo do diagrama; `hide`/ausente mantém recolhida. | `hide` |
 | `only` | `1` esconde a barra de botões e a seção de código-fonte na página compartilhada, deixando só título + diagrama. | `0`/ausente |
+| `d3`   | `1` ativa renderização D3 force em vez de Mermaid SVG. Só funciona para diagramas `graph`, `flowchart` ou `mindmap`. O código Mermaid continua em `d`. | `0`/ausente |
+| `d3c`  | Configurações D3 compactadas (JSON → deflate-raw → base64url). Relevante com `d3=1`. Inclui física, interação do mouse, modo de exibição dos nós e sliders d3-force. | defaults embutidos |
 | `raw`  | `1` faz a página devolver **apenas o texto puro do código Mermaid** (sem HTML/CSS/JS visível), útil para consumo programático. Precisa de `d`. | ausente |
+
+## Modo D3 force (`d3=1`)
+
+- O parâmetro `d` **sempre** guarda o texto Mermaid original (não o grafo D3).
+- Na visualização, `js/mermaid-to-graph.js` converte o Mermaid em nós/links e
+  `js/d3-force-renderer.js` renderiza com simulação física (d3-force).
+- Tipos suportados: **`graph`**, **`flowchart`**, **`mindmap`**.
+- `d3c` guarda um JSON normalizado (ver `js/d3-config.js:DEFAULT_D3_CONFIG`) com:
+  - `physicsEnabled`, `showPlayPause`, `mouseMode` (`drag`|`repulsion`),
+    `nodeDisplay` (`large`|`small`|`medium`), `nodeSidebar`
+  - `force`: `linkDistance`, `linkStrength`, `chargeStrength`,
+    `centerStrength`, `collisionRadius`, `alphaDecay`, `velocityDecay`
+
+Para decodificar `d3c` manualmente, use o mesmo pipeline de `d` (base64url →
+deflate-raw → UTF-8 JSON) e passe por `deserializeD3Config` em `js/d3-config.js`.
 
 ## Passo a passo: construir uma URL a partir de um diagrama
 
@@ -57,11 +82,13 @@ servidor, banco de dados ou storage externo — todo o estado vive na URL.
    (`+` → `-`, `/` → `_`, remova o padding `=`).
 4. Monte a URL:
    ```
-   https://<host>/<path>/?d=<base64url>&t=<titulo-opcional>&th=<tema-opcional>
+   https://<host>/<path>/?d=<base64url>&t=<titulo-opcional>&th=<tema-opcional>&d3=1&d3c=<config-opcional>
    ```
    - `t` deve ser URL-encoded se tiver espaços/acentos.
    - Omita `th` se for `neutral` (é o default).
    - Adicione `only=1` para uma versão "somente diagrama".
+   - Adicione `d3=1` (+ `d3c` se quiser configurações D3 customizadas) para
+     renderização com D3 force (apenas `graph`/`flowchart`/`mindmap`).
    - Adicione `raw=1` (mantendo `d`) para obter o código-fonte como texto puro
      em vez da página renderizada — útil quando um agente só precisa ler o
      Mermaid de volta sem re-renderizar nada.
@@ -95,18 +122,19 @@ const url = `${baseUrl}?d=${b64url}`;
    const bytes = await inflateRaw(compressed); // deflate-raw, sem zlib header
    const diagramText = new TextDecoder().decode(bytes);
    ```
-4. Os demais parâmetros (`t`, `th`, `z`/`zs`/`zx`/`zy`, `mmd`, `only`) são
-   metadados de apresentação — não afetam o conteúdo do diagrama, só como ele
-   é exibido.
+4. Os demais parâmetros (`t`, `th`, `z`/`zs`/`zx`/`zy`, `mmd`, `only`, `d3`,
+   `d3c`) são metadados de apresentação — não alteram o conteúdo do diagrama
+   em `d`, só como ele é exibido (ou se usa D3 em vez de Mermaid SVG).
 
 ## Notas
 
 - Não há backend, banco de dados ou API: todo o estado do diagrama vive
   comprimido na própria URL. Não há limite de "diagramas salvos" — cada URL é
   autocontida.
-- URLs muito longas (diagramas grandes) podem ser truncadas por alguns
-  clientes; o próprio editor avisa quando a URL passa de ~7500 caracteres
-  (`URL_WARN_THRESHOLD` em `js/compress.js`).
+- URLs muito longas (diagramas grandes ou `d3c` customizado) podem ser
+  truncadas por alguns clientes; o próprio editor avisa quando a URL passa de
+  ~7500 caracteres (`URL_WARN_THRESHOLD` em `js/compress.js`).
 - Exportações auxiliares disponíveis na UI (não fazem parte do formato de
-  URL): PNG (rasterização do SVG renderizado), `.mmd` (texto-fonte bruto) e
-  `.excalidraw` (via `@excalidraw/mermaid-to-excalidraw`, client-side).
+  URL): PNG (rasterização do SVG renderizado ou canvas D3), `.mmd` (texto-fonte
+  bruto) e `.excalidraw` (via `@excalidraw/mermaid-to-excalidraw`,
+  client-side; requer render Mermaid, não D3).
