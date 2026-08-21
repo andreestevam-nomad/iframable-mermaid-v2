@@ -3,7 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Mermaid Renderer</title>
+    <title>DiagShare Renderer</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <style>
       html,
@@ -157,6 +161,21 @@
       html.mode-scroll .d3-force-viewport {
         min-height: 420px;
       }
+      .latex-output {
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100%;
+        padding: 1rem 1.25rem;
+        font-size: 1.05rem;
+        line-height: 1.55;
+        text-align: center;
+      }
+      .latex-output .katex-display {
+        margin: 0.6em 0;
+      }
+      html.theme-dark-bg .latex-output {
+        color: #e8edf2;
+      }
       html.mode-expand .d3-force-viewport {
         min-height: 100%;
         height: 100%;
@@ -284,7 +303,7 @@
   <body>
     <a class="sr-only" href="./llms.txt" rel="help">
       Guia para LLMs/agentes: como este app funciona e como construir ou
-      decodificar uma URL de diagrama Mermaid.
+      decodificar uma URL de diagrama (Mermaid ou PlantUML).
     </a>
     <div id="viewport">
       <div id="stage">
@@ -317,6 +336,9 @@
         });
       })();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/@plantuml/core@1.2026.6/viz-global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@plantuml/core@1.2026.6/openiconic.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@plantuml/core@1.2026.6/emoji.js"></script>
     <script type="module">
       import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.16.0/+esm";
 
@@ -1950,6 +1972,182 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         return String(code).replace(/\\n/g, "<br/>");
       }
 
+      const PLANTUML_CORE_VERSION = "1.2026.6";
+      const RENDERER_BUILD = "20260821e";
+      const KATEX_MODULE_URL =
+        "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.mjs";
+      const KATEX_AUTO_RENDER_URL =
+        "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.mjs";
+      const PLANTUML_MODULE_URL = `https://cdn.jsdelivr.net/npm/@plantuml/core@${PLANTUML_CORE_VERSION}/plantuml.js`;
+
+      /** @type {Promise<{ renderToString: Function }> | null} */
+      let plantumlModulePromise = null;
+
+      function loadPlantumlModule() {
+        if (!plantumlModulePromise) {
+          plantumlModulePromise = import(PLANTUML_MODULE_URL);
+        }
+        return plantumlModulePromise;
+      }
+
+      function normalizeDiagramLang(lang) {
+        const raw = String(lang || "")
+          .trim()
+          .toLowerCase();
+        if (raw === "puml" || raw === "plantuml") return "puml";
+        if (raw === "latex" || raw === "tex") return "latex";
+        return "mermaid";
+      }
+
+      const LATEX_ENV_RE =
+        /\\begin\{(?:equation|align|gather|multline|split|displaymath|array|matrix|pmatrix|bmatrix|vmatrix|cases)\*?\}/iu;
+
+      function looksLikeLatexCode(code) {
+        const normalized = String(code ?? "").replace(/^\uFEFF/u, "");
+        const trimmed = normalized.trim();
+        if (!trimmed) return false;
+        if (/^\\documentclass\b/u.test(trimmed)) return true;
+        if (LATEX_ENV_RE.test(trimmed)) return true;
+        if (trimmed.includes("$$")) return true;
+        if (trimmed.includes("\\[")) return true;
+        if (/^\\\[/u.test(trimmed)) return true;
+        if (/^\\[a-zA-Z@]/u.test(trimmed) && !trimmed.startsWith("@")) return true;
+        return false;
+      }
+
+      function looksLikePlantUmlCode(code) {
+        const normalized = String(code ?? "").replace(/^\uFEFF/u, "");
+        const trimmed = normalized.trim();
+        if (!trimmed) return false;
+        const lineStartRe =
+          /^\s*@start(?:uml|gantt|mindmap|salt|wire|json|yaml|dot|ebnf|regex|chronology)/iu;
+        for (const line of trimmed.split(/\r?\n/u)) {
+          if (lineStartRe.test(line)) return true;
+        }
+        return false;
+      }
+
+      function resolveDiagramLang(code, lang) {
+        const explicit = normalizeDiagramLang(lang);
+        if (explicit === "latex") {
+          if (looksLikePlantUmlCode(code)) return "puml";
+          return "latex";
+        }
+        if (explicit === "puml") {
+          if (looksLikeLatexCode(code) && !looksLikePlantUmlCode(code)) {
+            return "latex";
+          }
+          return "puml";
+        }
+        if (looksLikePlantUmlCode(code)) return "puml";
+        if (looksLikeLatexCode(code)) return "latex";
+        return "mermaid";
+      }
+
+      function prepareLatexCode(code) {
+        return String(code || "")
+          .replace(/^\uFEFF/u, "")
+          .trim();
+      }
+
+      function latexDisplaySource(code) {
+        const trimmed = prepareLatexCode(code);
+        if (!trimmed) return "";
+        if (
+          /^\$\$[\s\S]*\$\$$/u.test(trimmed) ||
+          LATEX_ENV_RE.test(trimmed) ||
+          /^\\\[/u.test(trimmed) ||
+          /\\\([\s\S]*\\\)/u.test(trimmed)
+        ) {
+          return trimmed;
+        }
+        return `\\[${trimmed}\\]`;
+      }
+
+      let katexModulePromise = null;
+      let katexAutoRenderPromise = null;
+
+      async function loadKatex() {
+        if (!katexModulePromise) {
+          katexModulePromise = import(KATEX_MODULE_URL);
+        }
+        const mod = await katexModulePromise;
+        return mod.default ?? mod;
+      }
+
+      async function loadKatexAutoRender() {
+        if (!katexAutoRenderPromise) {
+          katexAutoRenderPromise = import(KATEX_AUTO_RENDER_URL);
+        }
+        const mod = await katexAutoRenderPromise;
+        return mod.default ?? mod.renderMathInElement;
+      }
+
+      async function renderLatexHtml(code) {
+        const katex = await loadKatex();
+        const wrapper = document.createElement("div");
+        wrapper.className = "latex-output";
+        const source = latexDisplaySource(code);
+
+        try {
+          const html = katex.renderToString(source, {
+            displayMode: true,
+            throwOnError: false,
+            errorColor: "#a32020",
+          });
+          if (html) {
+            wrapper.innerHTML = html;
+            return wrapper;
+          }
+        } catch {
+          /* tenta auto-render */
+        }
+
+        const renderMathInElement = await loadKatexAutoRender();
+        if (typeof renderMathInElement !== "function") {
+          throw new Error("KaTeX auto-render indisponível.");
+        }
+        wrapper.textContent = source;
+        renderMathInElement(wrapper, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "\\[", right: "\\]", display: true },
+            { left: "\\(", right: "\\)", display: false },
+            { left: "$", right: "$", display: false },
+          ],
+          throwOnError: false,
+          errorColor: "#a32020",
+        });
+        return wrapper;
+      }
+
+      function preparePlantumlCode(code) {
+        return String(code || "")
+          .replace(/^\uFEFF/u, "")
+          .trim();
+      }
+
+      function plantumlLines(code) {
+        return preparePlantumlCode(code).split(/\r?\n/u);
+      }
+
+      async function plantumlToSvg(code, theme) {
+        const { renderToString } = await loadPlantumlModule();
+        const lines = plantumlLines(code);
+        return new Promise((resolve, reject) => {
+          try {
+            renderToString(
+              lines,
+              (svg) => resolve(svg),
+              (message) =>
+                reject(new Error(message || "Falha ao renderizar PlantUML.")),
+            );
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+
       function post(payload) {
         // Com allow-same-origin no sandbox, a origem coincide com a página pai;
         // mantemos "*" para compatibilidade ao abrir renderer.html isolado.
@@ -2427,6 +2625,171 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         }
       }
 
+      async function renderPlantumlDiagram(
+        rawCode,
+        requestId,
+        expand,
+        view = null,
+        theme = currentTheme,
+      ) {
+        destroyD3Renderer();
+        const code = preparePlantumlCode(rawCode);
+        const nextView = normalizeView(view);
+        applyMermaidTheme(theme);
+
+        if (requestId !== latestRequestId) {
+          post({ type: "render-result", requestId, ok: true, skipped: true });
+          return;
+        }
+
+        if (nextView) preferredView = nextView;
+        setMode(expand);
+        root.replaceChildren();
+        clearMermaidArtifacts();
+
+        if (!code.trim()) {
+          root.innerHTML = '<p class="hint">O preview aparece aqui.</p>';
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+          return;
+        }
+
+        try {
+          const svgText = await plantumlToSvg(code, theme);
+          if (requestId !== latestRequestId) {
+            clearMermaidArtifacts();
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+
+          root.innerHTML = svgText;
+          prepareExpandSvg();
+          clearMermaidArtifacts();
+          await waitForLayout();
+          await waitForLayout();
+          if (expandMode) {
+            resolveView(preferredView);
+          }
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+            renderer: "plantuml",
+          });
+        } catch (error) {
+          const message = error?.message || String(error);
+          clearMermaidArtifacts();
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          root.innerHTML = "";
+          const err = document.createElement("div");
+          err.className = "error";
+          err.textContent = message;
+          root.appendChild(err);
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: false,
+            error: message,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+        }
+      }
+
+      async function renderLatexDiagram(
+        rawCode,
+        requestId,
+        expand,
+        view = null,
+        theme = currentTheme,
+      ) {
+        destroyD3Renderer();
+        const code = prepareLatexCode(rawCode);
+        const nextView = normalizeView(view);
+        applyMermaidTheme(theme);
+
+        if (requestId !== latestRequestId) {
+          post({ type: "render-result", requestId, ok: true, skipped: true });
+          return;
+        }
+
+        if (nextView) preferredView = nextView;
+        setMode(expand);
+        root.replaceChildren();
+        clearMermaidArtifacts();
+
+        if (!code.trim()) {
+          root.innerHTML = '<p class="hint">O preview aparece aqui.</p>';
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+          return;
+        }
+
+        try {
+          const latexEl = await renderLatexHtml(code);
+          if (requestId !== latestRequestId) {
+            clearMermaidArtifacts();
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+
+          root.replaceChildren(latexEl);
+          clearMermaidArtifacts();
+          await waitForLayout();
+          await waitForLayout();
+          if (expandMode) {
+            resolveView(preferredView);
+          }
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+            renderer: "latex",
+          });
+        } catch (error) {
+          const message = error?.message || String(error);
+          clearMermaidArtifacts();
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          root.innerHTML = "";
+          const err = document.createElement("div");
+          err.className = "error";
+          err.textContent = message;
+          root.appendChild(err);
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: false,
+            error: message,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+        }
+      }
+
       async function renderDiagram(
         rawCode,
         requestId,
@@ -2435,7 +2798,17 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         theme = currentTheme,
         useD3 = false,
         d3Config = null,
+        lang = "mermaid",
       ) {
+        const normalizedLang = normalizeDiagramLang(lang);
+        if (normalizedLang === "puml") {
+          return renderPlantumlDiagram(rawCode, requestId, expand, view, theme);
+        }
+
+        if (normalizedLang === "latex") {
+          return renderLatexDiagram(rawCode, requestId, expand, view, theme);
+        }
+
         if (useD3) {
           return renderD3Diagram(rawCode, requestId, expand, theme, d3Config, view);
         }
@@ -2683,7 +3056,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         if (!data) return;
 
         if (data.type === "ping") {
-          post({ type: "renderer-ready" });
+          post({ type: "renderer-ready", build: RENDERER_BUILD, plantuml: true });
           return;
         }
 
@@ -2740,11 +3113,32 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         }
 
         if (data.type === "parse") {
-          const { code, requestId } = data;
+          const { code, requestId, lang } = data;
           chain = chain
             .catch(() => {})
             .then(async () => {
               try {
+                const parsedLang = normalizeDiagramLang(lang);
+                if (parsedLang === "puml") {
+                  const prepared = preparePlantumlCode(code);
+                  if (!prepared || !String(prepared).trim()) {
+                    post({ type: "parse-result", requestId, ok: true });
+                    return;
+                  }
+                  await plantumlToSvg(prepared, currentTheme);
+                  post({ type: "parse-result", requestId, ok: true });
+                  return;
+                }
+                if (parsedLang === "latex") {
+                  const prepared = prepareLatexCode(code);
+                  if (!prepared || !String(prepared).trim()) {
+                    post({ type: "parse-result", requestId, ok: true });
+                    return;
+                  }
+                  await renderLatexHtml(prepared);
+                  post({ type: "parse-result", requestId, ok: true });
+                  return;
+                }
                 const prepared = prepareMermaidCode(code);
                 if (!prepared || !String(prepared).trim()) {
                   post({ type: "parse-result", requestId, ok: true });
@@ -2766,7 +3160,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
 
         if (data.type !== "render") return;
 
-        const { code, requestId, expand, view, theme, useD3, d3Config } = data;
+        const { code, requestId, expand, view, theme, useD3, d3Config, lang } = data;
         latestRequestId = requestId;
         chain = chain
           .catch(() => {})
@@ -2779,6 +3173,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
               theme,
               Boolean(useD3),
               d3Config,
+              lang,
             ),
           );
       }
@@ -2794,7 +3189,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         event.preventDefault();
         post({ type: "user-escape" });
       });
-      post({ type: "renderer-ready" });
+      post({ type: "renderer-ready", build: RENDERER_BUILD, plantuml: true });
     </script>
   </body>
 </html>

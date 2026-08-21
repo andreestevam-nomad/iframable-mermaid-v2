@@ -1,4 +1,4 @@
-# Mermaid Share
+# DiagShare
 
 App estática para escrever diagramas Mermaid, gerar uma URL compactada (`?d=` + `?t=` + opcional `?th=` / `?mmd=` / `?z=` / `?zs=` / `?zx=` / `?zy=`) e compartilhar a visualização.
 

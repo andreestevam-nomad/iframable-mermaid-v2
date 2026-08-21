@@ -12,20 +12,43 @@ import {
   parseD3Param,
 } from "./d3-config.js";
 import { bindD3ConfigDialog } from "./d3-config-dialog.js";
+import {
+  DEFAULT_DIAGRAM_LANG,
+  DIAGRAM_LANG_LATEX,
+  DIAGRAM_LANG_PLANTUML,
+  LANG_PARAM,
+  diagramTypeLabel,
+  isLatexLang,
+  isMermaidLang,
+  isPlantUmlLang,
+  normalizeDiagramLang,
+  parseLangParam,
+  resolveDiagramLang,
+  looksLikeLatexCode,
+  looksLikePlantUmlCode,
+  sourceDownloadLabel,
+  sourceToggleLabel,
+  sourceFileExtension,
+  wrapLatexAlignEnvironment,
+} from "./diagram-lang.js";
 import { createMermaidEditor, createMermaidSourceViewer } from "./editor.js";
 import { log } from "./log.js";
 
 const DRAFT_KEY = "mermaid-draft";
 const TITLE_KEY = "mermaid-title";
+const LANG_KEY = "diagram-lang";
 const AUTO_KEY = "mermaid-auto";
 const AUTO_DEBOUNCE_MIN_MS = 500;
 const AUTO_DEBOUNCE_MAX_MS = 1600;
 const URL_DISPLAY_MAX = 160;
 const RENDER_TIMEOUT_MS = 30000;
 const BOOT_AUTO_MAX_CHARS = 3000;
-const RENDERER_SRC = new URL("../renderer.html", import.meta.url).href;
+/** Versão do bundle renderer (bump ao alterar renderer.html). */
+const RENDERER_BUILD = "20260821e";
+const RENDERER_SRC = `${new URL("../renderer.html", import.meta.url).href}?v=${RENDERER_BUILD}`;
 const MERMAID_TO_EXCALIDRAW_SRC =
   "https://esm.sh/@excalidraw/mermaid-to-excalidraw@1.1.4";
+const MERMAID_HELP_SRC = "https://cdn.jsdelivr.net/npm/mermaid@11.16.0/+esm";
 const IFRAME_TARGET = "*";
 /** Origem canônica das URLs compartilháveis (evita localhost no link). */
 const PUBLIC_SHARE_ORIGIN = "https://andreestevam-nomad.github.io";
@@ -127,6 +150,7 @@ const els = {
   btnHelp: document.getElementById("btn-help"),
   helpDialog: document.getElementById("help-dialog"),
   selTheme: document.getElementById("sel-theme"),
+  selDiagramLang: document.getElementById("sel-diagram-lang"),
 };
 
 /** @type {ReturnType<typeof createMermaidEditor> | null} */
@@ -144,6 +168,7 @@ let cachedShareMmd = false;
 let cachedShareOnly = false;
 let cachedShareD3 = false;
 let cachedShareD3ConfigKey = "";
+let cachedShareLang = DEFAULT_DIAGRAM_LANG;
 let cachedShareViewKey = "";
 let urlEpoch = -1;
 let urlBusy = false;
@@ -162,6 +187,8 @@ let zoomModeEnabled = false;
 let zoomView = null;
 /** Tema Mermaid ativo (default: neutral). */
 let diagramTheme = DEFAULT_THEME;
+/** Dialeto do editor (`mermaid` | `puml`). */
+let diagramLang = DEFAULT_DIAGRAM_LANG;
 /** Painel de código expandido na view compartilhada (`?mmd=show|hide`). */
 let sourceExpanded = false;
 /** Preferências do editor que entram na URL compartilhada. */
@@ -445,19 +472,26 @@ function setButtonLabel(button, label) {
   button.title = label;
 }
 
+function syncExportSourceButtons() {
+  const downloadLabel = sourceDownloadLabel(diagramLang);
+  if (els.btnExportPreviewMmd) {
+    els.btnExportPreviewMmd.textContent = downloadLabel;
+  }
+  setButtonLabel(els.btnExportOutputMmd, downloadLabel);
+}
+
 function syncSourceExpandedUi() {
   if (els.outputSource) {
     els.outputSource.dataset.mmd = sourceExpanded ? "show" : "hide";
   }
   if (els.btnToggleSource) {
-    const label = sourceExpanded
-      ? "Ocultar código Mermaid"
-      : "Ver código Mermaid";
+    const label = sourceToggleLabel(diagramLang, sourceExpanded);
     els.btnToggleSource.setAttribute(
       "aria-pressed",
       sourceExpanded ? "true" : "false",
     );
     setButtonLabel(els.btnToggleSource, label);
+    els.btnToggleSource.title = `${label} (?mmd=show / ?mmd=hide)`;
   }
   if (sourceExpanded) {
     ensureSourceViewer();
@@ -482,6 +516,7 @@ function buildShareUrl(
     zoom = false,
     view = null,
     theme = diagramTheme,
+    lang = diagramLang,
     mmd = false,
     only = false,
     d3 = false,
@@ -500,6 +535,10 @@ function buildShareUrl(
   // Omite th quando é o padrão (neutral) para URLs mais curtas.
   if (nextTheme !== DEFAULT_THEME) {
     url.searchParams.set(THEME_PARAM, nextTheme);
+  }
+  const nextLang = normalizeDiagramLang(lang);
+  if (nextLang !== DEFAULT_DIAGRAM_LANG) {
+    url.searchParams.set(LANG_PARAM, DIAGRAM_LANG_PLANTUML);
   }
   // Padrão desligado: só inclui z=1 quando o link deve abrir com zoom.
   if (zoom) {
@@ -537,15 +576,99 @@ function serializeD3ConfigForCache(config) {
 }
 
 function isPreviewD3Active(code = getEditorValue()) {
-  return d3ForceEnabled && isD3CompatibleDiagram(code);
+  return (
+    isMermaidLang(diagramLang) &&
+    d3ForceEnabled &&
+    isD3CompatibleDiagram(code)
+  );
 }
 
 function isPreviewExpandEnabled(code = getEditorValue()) {
   return previewZoomEnabled || isPreviewD3Active(code);
 }
 
+function syncDiagramLangSelect() {
+  if (!els.selDiagramLang) return;
+  els.selDiagramLang.value = normalizeDiagramLang(diagramLang);
+}
+
+function syncDiagramLangUi() {
+  syncDiagramLangSelect();
+  document.body.dataset.diagramLang = normalizeDiagramLang(diagramLang);
+  if (els.editorHost) {
+    els.editorHost.setAttribute(
+      "aria-label",
+      `Código ${diagramTypeLabel(diagramLang)}`,
+    );
+  }
+  const mermaidOnly = isMermaidLang(diagramLang);
+  if (els.btnStripComments) els.btnStripComments.hidden = !mermaidOnly;
+  if (els.btnFormat) els.btnFormat.hidden = !mermaidOnly;
+  if (els.btnMinify) els.btnMinify.hidden = !mermaidOnly;
+  if (els.btnExportPreviewExcalidraw) {
+    els.btnExportPreviewExcalidraw.hidden = !mermaidOnly;
+  }
+  syncD3ControlsVisibility();
+  syncExportSourceButtons();
+}
+
+function persistDiagramLang() {
+  try {
+    sessionStorage.setItem(LANG_KEY, normalizeDiagramLang(diagramLang));
+  } catch {
+    // ignore
+  }
+}
+
+function applyLatexAlignWrapToEditorIfNeeded() {
+  if (!isLatexLang(diagramLang) || !editor) return false;
+  const code = getEditorValue();
+  const wrapped = wrapLatexAlignEnvironment(code);
+  if (wrapped === code) return false;
+  editor.setValue(wrapped);
+  onEditorContentChanged();
+  return true;
+}
+
+function maybeSyncDiagramLangFromCode(code) {
+  if (looksLikePlantUmlCode(code) && !isPlantUmlLang(diagramLang)) {
+    diagramLang = DIAGRAM_LANG_PLANTUML;
+    persistDiagramLang();
+    syncDiagramLangUi();
+    return;
+  }
+  if (
+    looksLikeLatexCode(code) &&
+    !looksLikePlantUmlCode(code) &&
+    !isLatexLang(diagramLang)
+  ) {
+    diagramLang = DIAGRAM_LANG_LATEX;
+    persistDiagramLang();
+    syncDiagramLangUi();
+    applyLatexAlignWrapToEditorIfNeeded();
+  }
+}
+
+function onDiagramLangChanged() {
+  const prevLang = diagramLang;
+  diagramLang = normalizeDiagramLang(els.selDiagramLang?.value);
+  persistDiagramLang();
+  syncDiagramLangUi();
+  if (isLatexLang(diagramLang) && !isLatexLang(prevLang)) {
+    applyLatexAlignWrapToEditorIfNeeded();
+  }
+  invalidateUrlPreview();
+  if (editorHasCode()) {
+    void renderPreview(getEditorValue());
+  }
+  if (isAutoEnabled() && editorHasCode()) {
+    void refreshUrlPreview({ quiet: true });
+  }
+}
+
 function syncD3ControlsVisibility() {
-  const compatible = isD3CompatibleDiagram(getEditorValue());
+  const compatible =
+    isMermaidLang(diagramLang) && isD3CompatibleDiagram(getEditorValue());
   if (els.d3ForceOption) {
     els.d3ForceOption.hidden = !compatible;
   }
@@ -792,15 +915,23 @@ function ensureRenderer(iframe) {
   if (existing) return existing;
 
   const readyPromise = new Promise((resolve, reject) => {
+    let reloadAttempted = false;
+
     const timer = window.setTimeout(() => {
       cleanup();
       readyMap.delete(iframe);
-      reject(new Error("Timeout ao carregar o renderer Mermaid."));
+      reject(new Error("Timeout ao carregar o renderer."));
     }, RENDER_TIMEOUT_MS);
 
     function onMessage(event) {
       if (event.source !== iframe.contentWindow) return;
       if (event.data?.type !== "renderer-ready") return;
+      const build = event.data?.build;
+      if (build !== RENDERER_BUILD && !reloadAttempted) {
+        reloadAttempted = true;
+        iframe.src = RENDERER_SRC;
+        return;
+      }
       cleanup();
       resolve();
     }
@@ -831,6 +962,11 @@ function ensureRenderer(iframe) {
 
 function reloadRenderer(iframe) {
   readyMap.delete(iframe);
+  try {
+    iframe.src = "about:blank";
+  } catch {
+    // ignore
+  }
   return ensureRenderer(iframe);
 }
 
@@ -914,6 +1050,7 @@ async function renderInFrame(
     expand = false,
     view = null,
     theme = diagramTheme,
+    lang = diagramLang,
     useD3 = false,
     d3Config: nextD3Config = d3Config,
   } = {},
@@ -922,7 +1059,8 @@ async function renderInFrame(
   const requestId = ++requestSeq;
   const nextView = expand ? normalizeZoomView(view) : null;
   const nextTheme = normalizeTheme(theme);
-  const d3Enabled = Boolean(useD3);
+  const nextLang = normalizeDiagramLang(lang);
+  const d3Enabled = Boolean(useD3) && isMermaidLang(nextLang);
 
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -955,6 +1093,7 @@ async function renderInFrame(
         expand,
         view: nextView,
         theme: nextTheme,
+        lang: nextLang,
         useD3: d3Enabled,
         d3Config: d3Enabled ? normalizeD3Config(nextD3Config) : null,
       });
@@ -985,7 +1124,12 @@ async function parseInPreview(code) {
     });
 
     try {
-      postToRenderer(els.previewFrame, { type: "parse", code, requestId });
+      postToRenderer(els.previewFrame, {
+        type: "parse",
+        code,
+        requestId,
+        lang: normalizeDiagramLang(diagramLang),
+      });
     } catch (error) {
       window.clearTimeout(timer);
       pending.delete(requestId);
@@ -1025,7 +1169,13 @@ function requestPngExport(iframe) {
 
 function sanitizeFilenameBase(title) {
   const clean = String(title || "").trim();
-  if (!clean) return "diagrama-mermaid";
+  if (!clean) {
+    return isPlantUmlLang(diagramLang)
+      ? "diagrama-plantuml"
+      : isLatexLang(diagramLang)
+        ? "diagrama-latex"
+        : "diagrama-mermaid";
+  }
   return (
     clean
       .normalize("NFD")
@@ -1079,8 +1229,8 @@ function exportPreviewMmd() {
     setStatus("Nenhum código para salvar.", "warn");
     return;
   }
-  downloadText(code, `${sanitizeFilenameBase(getDiagramTitle())}.mmd`);
-  setStatus(".mmd salvo.", "ok");
+  downloadText(code, `${sanitizeFilenameBase(getDiagramTitle())}.${sourceFileExtension(diagramLang)}`);
+  setStatus(`.${sourceFileExtension(diagramLang)} salvo.`, "ok");
 }
 
 async function exportOutputPng() {
@@ -1105,8 +1255,8 @@ function exportOutputMmd() {
     return;
   }
   const title = els.outputTitle?.hidden ? "" : els.outputTitle?.textContent;
-  downloadText(code, `${sanitizeFilenameBase(title)}.mmd`);
-  setStatus(".mmd salvo.", "ok");
+  downloadText(code, `${sanitizeFilenameBase(title)}.${sourceFileExtension(diagramLang)}`);
+  setStatus(`.${sourceFileExtension(diagramLang)} salvo.`, "ok");
 }
 
 /** @type {Promise<{parseMermaidToExcalidraw: Function}> | null} */
@@ -1120,6 +1270,10 @@ function loadMermaidToExcalidraw() {
 }
 
 async function exportAsExcalidraw(code, filenameBase) {
+  if (!isMermaidLang(diagramLang)) {
+    setStatus("Excalidraw só está disponível para Mermaid.", "warn");
+    return;
+  }
   const trimmed = String(code || "").trim();
   if (!trimmed) {
     setStatus("Nenhum código para converter.", "warn");
@@ -1263,7 +1417,7 @@ function onRendererMessage(event) {
   if (data.ok) {
     entry.resolve(data);
   } else {
-    entry.reject(new Error(data.error || "Falha ao renderizar Mermaid."));
+    entry.reject(new Error(data.error || "Falha ao renderizar o diagrama."));
   }
 }
 
@@ -1274,11 +1428,16 @@ async function renderPreview(code) {
   setPreviewStatus(code.trim() ? "Renderizando preview…" : "");
 
   try {
+    const previewLang = normalizeDiagramLang(diagramLang);
     await renderInFrame(els.previewFrame, code, {
       expand: isPreviewExpandEnabled(code),
       view: previewZoomView,
       theme: diagramTheme,
-      useD3: d3ForceEnabled && isD3CompatibleDiagram(code),
+      lang: previewLang,
+      useD3:
+        d3ForceEnabled &&
+        isMermaidLang(previewLang) &&
+        isD3CompatibleDiagram(code),
       d3Config,
     });
     if (isPreviewD3Active(code)) {
@@ -1328,6 +1487,7 @@ function scheduleAutoUpdate({ fromBoot = false } = {}) {
 }
 
 function onEditorContentChanged({ fromBoot = false } = {}) {
+  maybeSyncDiagramLangFromCode(getEditorValue());
   editorEpoch += 1;
   syncD3ControlsVisibility();
   updatePreviewMode();
@@ -1416,6 +1576,7 @@ function invalidateUrlPreview() {
   cachedShareUrl = "";
   cachedShareTitle = "";
   cachedShareTheme = "";
+  cachedShareLang = DEFAULT_DIAGRAM_LANG;
   cachedShareZoom = false;
   cachedShareMmd = false;
   cachedShareOnly = false;
@@ -1503,17 +1664,22 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     const param = await compressToParam(source);
     const title = getDiagramTitle();
     const theme = diagramTheme;
+    const lang = diagramLang;
     const zoom = previewZoomEnabled;
     const view = previewZoomView;
     const mmd = shareShowMmd;
     const only = shareOnlyDiagram;
-    const d3 = shareD3Force && isD3CompatibleDiagram(source);
+    const d3 =
+      shareD3Force &&
+      isMermaidLang(lang) &&
+      isD3CompatibleDiagram(source);
     let d3ConfigParam = "";
     if (d3) {
       d3ConfigParam = await compressD3Config(d3Config);
     }
     const url = buildShareUrl(param, title, {
       theme,
+      lang,
       zoom,
       view,
       mmd,
@@ -1526,6 +1692,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareUrl = url;
     cachedShareTitle = title;
     cachedShareTheme = theme;
+    cachedShareLang = lang;
     cachedShareZoom = zoom;
     cachedShareMmd = mmd;
     cachedShareOnly = only;
@@ -1547,6 +1714,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareUrl = "";
     cachedShareTitle = "";
     cachedShareTheme = "";
+    cachedShareLang = DEFAULT_DIAGRAM_LANG;
     cachedShareZoom = false;
     cachedShareMmd = false;
     cachedShareOnly = false;
@@ -1567,12 +1735,18 @@ async function ensureShareUrl() {
     urlEpoch === editorEpoch &&
     cachedShareTitle === getDiagramTitle() &&
     cachedShareTheme === diagramTheme &&
+    cachedShareLang === diagramLang &&
     cachedShareZoom === previewZoomEnabled &&
     cachedShareMmd === shareShowMmd &&
     cachedShareOnly === shareOnlyDiagram &&
-    cachedShareD3 === (shareD3Force && isD3CompatibleDiagram(getEditorValue())) &&
+    cachedShareD3 ===
+      (shareD3Force &&
+        isMermaidLang(diagramLang) &&
+        isD3CompatibleDiagram(getEditorValue())) &&
     cachedShareD3ConfigKey ===
-      (shareD3Force && isD3CompatibleDiagram(getEditorValue())
+      (shareD3Force &&
+        isMermaidLang(diagramLang) &&
+        isD3CompatibleDiagram(getEditorValue())
         ? d3ConfigCacheKey(d3Config)
         : "") &&
     cachedShareViewKey === zoomViewCacheKey(previewZoomView)
@@ -1655,6 +1829,8 @@ async function goToEditor(code, title = "") {
   shareOnlyDiagram = onlyDiagram;
   d3ForceEnabled = parseD3Param(params);
   shareD3Force = d3ForceEnabled;
+  diagramLang = parseLangParam(params);
+  persistDiagramLang();
   const d3ConfigParam = params.get(D3_CONFIG_PARAM);
   if (d3ConfigParam) {
     d3Config = await decompressD3Config(d3ConfigParam);
@@ -1663,7 +1839,7 @@ async function goToEditor(code, title = "") {
   url.search = "";
   url.hash = "";
   window.history.pushState({}, "", url.pathname + url.search);
-  document.title = "Mermaid Share";
+  document.title = "DiagShare";
   showView("input");
   await bootInput(code, title);
 }
@@ -1674,11 +1850,11 @@ function applyOutputTitle(title) {
   if (clean) {
     els.outputTitle.textContent = clean;
     els.outputTitle.hidden = false;
-    document.title = `${clean} · Mermaid Share`;
+    document.title = `${clean} · DiagShare`;
   } else {
     els.outputTitle.textContent = "";
     els.outputTitle.hidden = true;
-    document.title = "Mermaid Share";
+    document.title = "DiagShare";
   }
 }
 
@@ -1796,10 +1972,7 @@ function scheduleLayoutRefresh() {
 
 function showOutputSource(code) {
   if (!els.outputSource || !els.outputSourceCode) return;
-  const next = code ?? "";
-  els.outputSourceCode.value = next;
-  // Mantém o texto no HTML serializado (export / “salvar página”).
-  els.outputSourceCode.textContent = next;
+  mirrorTextareaSource(els.outputSourceCode, code);
   els.outputSource.hidden = onlyDiagram;
   syncSourceExpandedUi();
 }
@@ -1807,8 +1980,7 @@ function showOutputSource(code) {
 function hideOutputSource() {
   if (!els.outputSource || !els.outputSourceCode) return;
   els.outputSource.hidden = true;
-  els.outputSourceCode.value = "";
-  els.outputSourceCode.textContent = "";
+  mirrorTextareaSource(els.outputSourceCode, "");
   if (sourceViewer) {
     sourceViewer.destroy();
     sourceViewer = null;
@@ -1833,7 +2005,7 @@ async function copyOutputSource() {
   }
   try {
     await navigator.clipboard.writeText(code);
-    setStatus("Código Mermaid copiado.", "ok");
+    setStatus(`Código ${diagramTypeLabel(diagramLang)} copiado.`, "ok");
     if (els.btnCopySource) {
       els.btnCopySource.classList.add("is-copied");
       setButtonLabel(els.btnCopySource, "Copiado");
@@ -1864,6 +2036,13 @@ async function bootOutput(param, title = "", outputOptions = {}) {
           );
   d3ForceEnabled = useD3;
   d3Config = outputD3Config;
+  diagramLang =
+    outputOptions.lang != null
+      ? normalizeDiagramLang(outputOptions.lang)
+      : parseLangParam(new URLSearchParams(window.location.search));
+  if (els.btnExportOutputExcalidraw) {
+    els.btnExportOutputExcalidraw.hidden = !isMermaidLang(diagramLang);
+  }
   showView("output");
   syncZoomModeUi();
   syncZoomQueryParam();
@@ -1880,8 +2059,15 @@ async function bootOutput(param, title = "", outputOptions = {}) {
 
   try {
     const code = await decompressFromParam(param);
+    diagramLang = resolveDiagramLang(code, diagramLang);
+    if (els.btnExportOutputExcalidraw) {
+      els.btnExportOutputExcalidraw.hidden = !isMermaidLang(diagramLang);
+    }
+    syncExportSourceButtons();
+    syncSourceExpandedUi();
     lastOutputCode = code;
-    const d3Compatible = useD3 && isD3CompatibleDiagram(code);
+    const d3Compatible =
+      useD3 && isD3CompatibleDiagram(code) && isMermaidLang(diagramLang);
     syncD3OutputLayout(d3Compatible);
     if (d3Compatible) {
       zoomModeEnabled = true;
@@ -1893,6 +2079,7 @@ async function bootOutput(param, title = "", outputOptions = {}) {
       expand: d3Compatible || zoomModeEnabled,
       view: zoomView,
       theme: diagramTheme,
+      lang: diagramLang,
       useD3: d3Compatible,
       d3Config: outputD3Config,
     });
@@ -1979,13 +2166,23 @@ function onThemeChanged() {
 
 async function bootInput(initialCode, initialTitle) {
   showView("input");
-  document.title = "Mermaid Share";
+  document.title = "DiagShare";
   document.body.dataset.zoom = "off";
 
   const draft = initialCode ?? sessionStorage.getItem(DRAFT_KEY) ?? "";
   restoreAutoPreference();
   restoreTitle(initialTitle);
+  try {
+    // Só restaura sessionStorage no fluxo do editor (draft); links ?d= já definem lang.
+    if (initialCode == null) {
+      const storedLang = sessionStorage.getItem(LANG_KEY);
+      if (storedLang) diagramLang = normalizeDiagramLang(storedLang);
+    }
+  } catch {
+    // ignore
+  }
   syncThemeSelect();
+  syncDiagramLangUi();
   syncEditorShareControls();
   if (!d3ConfigUi && els.d3ConfigDialog) {
     d3ConfigUi = bindD3ConfigDialog(els.d3ConfigDialog, onD3ConfigApplied);
@@ -2013,6 +2210,13 @@ async function bootInput(initialCode, initialTitle) {
     editor.setValue(draft);
   }
 
+  maybeSyncDiagramLangFromCode(getEditorValue());
+  if (isLatexLang(diagramLang)) {
+    applyLatexAlignWrapToEditorIfNeeded();
+  }
+  syncDiagramLangUi();
+  syncExportSourceButtons();
+
   if (!inputBound) {
     inputBound = true;
     bindPreviewLayoutObserver();
@@ -2023,6 +2227,10 @@ async function bootInput(initialCode, initialTitle) {
 
     els.selTheme?.addEventListener("change", () => {
       onThemeChanged();
+    });
+
+    els.selDiagramLang?.addEventListener("change", () => {
+      onDiagramLangChanged();
     });
 
     els.chkZoomPreview?.addEventListener("change", () => {
@@ -2107,6 +2315,18 @@ function parseRawParam(params = new URLSearchParams(window.location.search)) {
   return value === "1" || value === "true" || value === "on" || value === "yes";
 }
 
+function normalizeSourceText(text) {
+  return String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function mirrorTextareaSource(textarea, text) {
+  if (!textarea) return;
+  const next = normalizeSourceText(text);
+  textarea.value = next;
+  // Espelha no DOM para exportar/salvar a página com quebras de linha.
+  textarea.textContent = next;
+}
+
 async function renderRawView(param) {
   let text;
   try {
@@ -2114,13 +2334,24 @@ async function renderRawView(param) {
   } catch (error) {
     text = error?.message || String(error);
   }
-  try {
-    document.open("text/plain", "replace");
-  } catch {
-    document.open();
-  }
-  document.write(text ?? "");
-  document.close();
+  const normalized = normalizeSourceText(text);
+  document.title = "Diagram source";
+  document.documentElement.lang = "pt-BR";
+  document.head.replaceChildren();
+  const meta = document.createElement("meta");
+  meta.charset = "utf-8";
+  document.head.append(meta);
+  const style = document.createElement("style");
+  style.textContent =
+    "html,body{margin:0;padding:0}" +
+    "pre.raw-source{margin:0;padding:1rem;white-space:pre-wrap;word-break:break-word;" +
+    "font:0.875rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}";
+  document.head.append(style);
+  document.body.replaceChildren();
+  const pre = document.createElement("pre");
+  pre.className = "raw-source";
+  pre.textContent = normalized;
+  document.body.append(pre);
 }
 
 async function boot() {
@@ -2148,6 +2379,7 @@ async function boot() {
     await bootOutput(diagramParam, titleParam, {
       useD3: outputUseD3,
       d3ConfigParam: outputD3ConfigParam,
+      lang: parseLangParam(params),
     });
   } else {
     await bootInput();
@@ -2159,6 +2391,7 @@ function bindHelpDialog() {
   els.btnHelp.addEventListener("click", () => {
     if (typeof els.helpDialog.showModal === "function") {
       els.helpDialog.showModal();
+      void renderHelpMermaidCharts();
     }
   });
   els.helpDialog.addEventListener("click", (event) => {
@@ -2166,6 +2399,46 @@ function bindHelpDialog() {
       els.helpDialog.close();
     }
   });
+}
+
+/** @type {Promise<import("mermaid").default> | null} */
+let helpMermaidModule = null;
+
+function loadHelpMermaid() {
+  if (!helpMermaidModule) {
+    helpMermaidModule = import(MERMAID_HELP_SRC).then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "neutral",
+        securityLevel: "strict",
+      });
+      return mermaid;
+    });
+  }
+  return helpMermaidModule;
+}
+
+async function renderHelpMermaidCharts() {
+  if (!els.helpDialog) return;
+  const nodes = els.helpDialog.querySelectorAll(
+    "[data-help-mermaid]:not([data-rendered])",
+  );
+  if (!nodes.length) return;
+  const mermaid = await loadHelpMermaid();
+  for (const node of nodes) {
+    const code = node.textContent.trim();
+    if (!code) continue;
+    const id = `help-mmd-${Math.random().toString(36).slice(2, 9)}`;
+    try {
+      const { svg } = await mermaid.render(id, code);
+      node.innerHTML = svg;
+      node.dataset.rendered = "1";
+    } catch {
+      node.textContent = "Diagrama não renderizado.";
+      node.dataset.rendered = "1";
+    }
+  }
 }
 
 window.addEventListener("message", onRendererMessage);

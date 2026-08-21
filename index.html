@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Mermaid Share</title>
+    <title>DiagShare</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,7 +11,7 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./css/styles.css?v=20260728q" />
+    <link rel="stylesheet" href="./css/styles.css?v=20260821e" />
     <script type="importmap">
       {
         "imports": {
@@ -30,7 +30,7 @@
   <body data-view="input">
     <header class="app-header" id="app-header">
       <div class="brand-row">
-        <div class="brand">Mermaid Share</div>
+        <div class="brand">DiagShare</div>
         <button
           type="button"
           id="btn-help"
@@ -54,48 +54,70 @@
           </button>
         </header>
         <div class="help-dialog-body">
+          <p class="help-intro">
+            <strong>DiagShare</strong> é uma forma simples de compartilhar diagramas
+            e fórmulas: tudo fica na URL — sem backend, sem servidor. Cole o
+            código, gere o link e incorpore em qualquer página com
+            <code>&lt;iframe&gt;</code>.
+          </p>
+          <p class="help-flow-title">Do código à URL</p>
+          <div class="help-mermaid-wrap">
+            <div class="help-mermaid" data-help-mermaid>
+flowchart LR
+  A["Código fonte"] --> B["UTF-8"]
+  B --> C["Base64"]
+  C --> D["GZIP"]
+  D --> E["?d= na URL"]
+  E --> F["renderer.html"]
+            </div>
+          </div>
+          <p class="help-flow-title">Saídas no renderer</p>
+          <div class="help-mermaid-wrap">
+            <div class="help-mermaid" data-help-mermaid>
+flowchart TB
+  F["renderer.html"] --> M["Mermaid SVG"]
+  F --> P["PlantUML SVG"]
+  F --> D3["D3 Force"]
+  F --> L["LaTeX KaTeX"]
+            </div>
+          </div>
           <ol class="help-steps">
             <li>
-              <strong>Escreva ou cole</strong> um diagrama Mermaid no painel da
-              esquerda. O editor destaca a sintaxe e valida o código ao digitar.
+              Escreva ou cole <strong>Mermaid</strong>, <strong>PlantUML</strong> ou
+              <strong>LaTeX</strong> no editor. O seletor ao lado de “Código” define
+              <code>lang=mermaid</code>, <code>lang=puml</code> ou
+              <code>lang=latex</code> na URL (sem <code>lang</code>, o padrão é
+              Mermaid).
             </li>
             <li>
-              Use o botão de <strong>refresh</strong> no preview para ver o
-              resultado, ou ligue o <strong>Modo auto</strong> para atualizar
-              preview e URL a cada alteração.
+              Use o <strong>refresh</strong> no preview ou ligue o <strong>Modo
+              auto</strong> para atualizar preview e URL ao digitar.
             </li>
             <li>
-              Em <strong>Configurações</strong> (ícone de engrenagem no preview),
-              ajuste tema, zoom, código mmd, modo “apenas diagrama” e, para
-              <code>graph</code>/<code>flowchart</code>/<code>mindmap</code>,
-              o modo <strong>D3JS Force</strong> (<code>?d3=</code>,
-              <code>?d3c=</code>).
+              Em <strong>Configurações</strong> do preview: tema, zoom, código-fonte,
+              modo “apenas diagrama” e, para Mermaid
+              <code>graph</code>/<code>flowchart</code>/<code>mindmap</code>, o modo
+              <strong>D3JS Force</strong> (<code>?d3=</code>, <code>?d3c=</code>).
             </li>
             <li>
-              (Opcional) Defina um <strong>título</strong> ao lado de
-              “Código Mermaid” — ele entra na URL como <code>?t=</code> e
-              aparece acima do diagrama na visualização final.
+              (Opcional) Defina um <strong>título</strong> — entra como
+              <code>?t=</code> e aparece na visualização compartilhada.
             </li>
             <li>
-              Clique em <strong>Gerar URL</strong> (ou deixe o modo auto fazer
-              isso). O diagrama é compactado em <code>?d=</code>. Depois use
-              <strong>Copiar URL</strong> ou <strong>Abrir em nova guia</strong>
-              para compartilhar.
+              <strong>Gerar URL</strong> compacta o conteúdo em <code>?d=</code>.
+              Use <strong>Copiar URL</strong> ou <strong>Abrir em nova guia</strong>
+              para compartilhar ou embutir.
             </li>
             <li>
-              Na página compartilhada, o visitante vê o <strong>título</strong>
-              e o <strong>diagrama</strong>, com opções para editar, tela cheia,
-              <strong>modo zoom</strong> (<code>?z=</code>) e
-              <strong>Ver código Mermaid</strong>
-              (<code>?mmd=show</code> / <code>?mmd=hide</code>). O código fica
-              no final da página (quase oculto quando recolhido) para exportação.
+              Na página compartilhada o visitante vê o diagrama ou fórmula, com
+              opções de editar, tela cheia, zoom (<code>?z=</code>) e ver o código
+              (<code>?mmd=show</code> / <code>?mmd=hide</code>).
             </li>
           </ol>
           <p class="help-note">
-            Atalhos úteis no editor:
+            Atalhos do editor (apenas Mermaid):
             <strong>Remover comentários</strong>,
-            <strong>Formatar</strong> (reindenta) e
-            <strong>Minificar</strong> (compacta o texto).
+            <strong>Formatar</strong> e <strong>Minificar</strong>.
           </p>
         </div>
       </form>
@@ -111,7 +133,7 @@
         </header>
         <div class="preview-settings-dialog-body">
           <label class="theme-select theme-select-block" for="sel-theme">
-            Tema Mermaid
+            Tema do diagrama
             <select id="sel-theme" aria-label="Tema do diagrama">
               <option value="neutral" selected>Neutral</option>
               <option value="default">Default</option>
@@ -140,7 +162,7 @@
             title="Abre a página compartilhada com o código expandido (?mmd=show)"
           >
             <input type="checkbox" id="chk-show-mmd" />
-            Mostrar código mmd
+            Mostrar código
           </label>
           <label
             class="preview-settings-check"
@@ -395,7 +417,14 @@
       <div class="input-layout">
         <section class="panel" aria-labelledby="label-editor">
           <div class="panel-label" id="label-editor">
-            <span class="panel-label-text">Código Mermaid</span>
+            <span class="panel-label-text">Código</span>
+            <label class="diagram-lang-field" for="sel-diagram-lang">
+              <select id="sel-diagram-lang" class="diagram-lang-select" aria-label="Tipo de diagrama">
+                <option value="mermaid" selected>Mermaid</option>
+                <option value="puml">PlantUML</option>
+                <option value="latex">LaTeX</option>
+              </select>
+            </label>
             <div class="title-field">
               <label class="title-field-label" for="diagram-title">Título</label>
               <input
@@ -423,7 +452,7 @@
             id="editor"
             class="editor-host"
             role="textbox"
-            aria-label="Código Mermaid"
+            aria-label="Código do diagrama"
             aria-multiline="true"
           ></div>
         </section>
@@ -528,7 +557,7 @@
                     class="preview-menu-item"
                     role="menuitem"
                   >
-                    Salvar .mmd
+                    Baixar .mmd
                   </button>
                   <button
                     type="button"
@@ -546,7 +575,7 @@
             <iframe
               id="preview-frame"
               class="render-frame"
-              title="Preview Mermaid"
+              title="Preview do diagrama"
               sandbox="allow-scripts allow-same-origin"
             ></iframe>
           </div>
@@ -593,7 +622,7 @@
           <iframe
             id="output-frame"
             class="render-frame output-frame"
-            title="Diagrama Mermaid"
+            title="Diagrama"
             sandbox="allow-scripts allow-same-origin"
           ></iframe>
           <div id="output-error" class="error-box" hidden></div>
@@ -662,14 +691,14 @@
             class="btn-action"
             aria-pressed="false"
             aria-controls="output-source"
-            title="Mostrar ou ocultar o código Mermaid (?mmd=)"
-            aria-label="Ver código Mermaid"
+            title="Mostrar ou ocultar o código-fonte (?mmd=)"
+            aria-label="Ver código"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M16 18 22 12 16 6"></path>
               <path d="M8 6 2 12 8 18"></path>
             </svg>
-            <span class="btn-label">Ver código Mermaid</span>
+            <span class="btn-label">Ver código</span>
           </button>
           <button
             type="button"
@@ -691,7 +720,7 @@
             type="button"
             id="btn-raw-source"
             class="btn-action"
-            title="Abrir código Mermaid como texto puro (?raw=1)"
+            title="Abrir código como texto puro (?raw=1)"
             aria-label="Código raw"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -719,14 +748,14 @@
             type="button"
             id="btn-export-output-mmd"
             class="btn-action"
-            title="Salvar .mmd"
-            aria-label="Salvar .mmd"
+            title="Baixar .mmd"
+            aria-label="Baixar .mmd"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"></path>
               <path d="M14 3v6h6"></path>
             </svg>
-            <span class="btn-label">Salvar .mmd</span>
+            <span class="btn-label">Baixar .mmd</span>
           </button>
           <button
             type="button"
@@ -747,7 +776,7 @@
           id="output-source"
           data-mmd="hide"
           hidden
-          aria-label="Código Mermaid"
+          aria-label="Código do diagrama"
         >
           <div id="output-source-viewer" class="output-source-viewer"></div>
           <textarea
@@ -755,7 +784,7 @@
             class="output-source-code"
             readonly
             spellcheck="false"
-            aria-label="Código-fonte Mermaid"
+            aria-label="Código-fonte do diagrama"
           ></textarea>
         </section>
       </div>
@@ -763,9 +792,9 @@
 
     <a class="sr-only" href="./llms.txt" rel="help">
       Guia para LLMs/agentes: como este app funciona e como construir ou
-      decodificar uma URL de diagrama Mermaid.
+      decodificar uma URL de diagrama (Mermaid ou PlantUML).
     </a>
 
-    <script type="module" src="./js/app.js?v=20260728p"></script>
+    <script type="module" src="./js/app.js?v=20260821f"></script>
   </body>
 </html>

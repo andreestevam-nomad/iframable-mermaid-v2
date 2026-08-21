@@ -1,4 +1,4 @@
-# Mermaid Share — llms.txt
+# DiagShare — llms.txt
 
 > Guia técnico para LLMs/agentes que precisem entender ou operar este projeto
 > (ex.: gerar uma URL compartilhável a partir de um diagrama Mermaid, ou
