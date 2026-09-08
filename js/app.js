@@ -122,6 +122,9 @@ const els = {
     "btn-export-output-excalidraw",
   ),
   outputActions: document.querySelector(".output-actions"),
+  outputActionsShell: document.getElementById("output-actions-shell"),
+  btnOutputActionsToggle: document.getElementById("btn-output-actions-toggle"),
+  outputActionsMenu: document.getElementById("output-actions-menu"),
   status: document.getElementById("status"),
   titleInput: document.getElementById("diagram-title"),
   btnGenerateUrl: document.getElementById("btn-generate-url"),
@@ -253,6 +256,7 @@ function showView(name) {
   document.body.dataset.view = name;
   if (name !== "output") {
     syncD3OutputLayout(false);
+    closeOutputActionsMenu();
   }
 }
 
@@ -446,12 +450,33 @@ function syncOnlyQueryParam() {
 }
 
 function applyOnlyDiagramUi() {
-  if (els.outputActions) {
-    els.outputActions.hidden = onlyDiagram;
+  if (els.outputActionsShell) {
+    els.outputActionsShell.hidden = onlyDiagram;
+  }
+  if (onlyDiagram) {
+    closeOutputActionsMenu();
   }
   if (els.outputSource && !els.outputSource.hidden) {
     els.outputSource.hidden = onlyDiagram;
   }
+}
+
+function setOutputActionsMenuOpen(open) {
+  if (!els.outputActionsMenu || !els.btnOutputActionsToggle) return;
+  const next = Boolean(open);
+  els.outputActionsMenu.hidden = !next;
+  els.btnOutputActionsToggle.setAttribute(
+    "aria-expanded",
+    next ? "true" : "false",
+  );
+}
+
+function closeOutputActionsMenu() {
+  setOutputActionsMenuOpen(false);
+}
+
+function toggleOutputActionsMenu() {
+  setOutputActionsMenuOpen(els.outputActionsMenu?.hidden !== false);
 }
 
 function ensureSourceViewer() {
@@ -732,21 +757,30 @@ function bindPreviewToolbar() {
     togglePreviewDownloadMenu();
   });
 
+  els.btnOutputActionsToggle?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleOutputActionsMenu();
+  });
+
   document.addEventListener("click", (event) => {
-    if (!els.previewDownloadMenu || els.previewDownloadMenu.hidden) return;
     const target = /** @type {Node | null} */ (event.target);
-    if (target && els.btnPreviewDownload?.contains(target)) return;
-    if (target && els.previewDownloadMenu.contains(target)) {
-      closePreviewDownloadMenu();
-      return;
+
+    if (els.previewDownloadMenu && !els.previewDownloadMenu.hidden) {
+      if (!(target && els.btnPreviewDownload?.contains(target))) {
+        closePreviewDownloadMenu();
+      }
     }
-    closePreviewDownloadMenu();
+
+    if (!els.outputActionsMenu || els.outputActionsMenu.hidden) return;
+    if (target && els.btnOutputActionsToggle?.contains(target)) return;
+    closeOutputActionsMenu();
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (exitOutputToEditor()) return;
     closePreviewDownloadMenu();
+    closeOutputActionsMenu();
   });
 }
 

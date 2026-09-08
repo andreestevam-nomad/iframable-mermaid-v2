@@ -626,8 +626,33 @@ flowchart TB
             sandbox="allow-scripts allow-same-origin"
           ></iframe>
           <div id="output-error" class="error-box" hidden></div>
-        </div>
-        <div class="output-actions">
+          <div class="output-actions-shell" id="output-actions-shell">
+            <button
+              type="button"
+              id="btn-output-actions-toggle"
+              class="output-actions-toggle"
+              aria-expanded="false"
+              aria-controls="output-actions-menu"
+              title="Opções do diagrama"
+              aria-label="Opções do diagrama"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z"
+                ></path>
+                <path
+                  d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+                ></path>
+              </svg>
+            </button>
+            <div
+              class="output-actions-menu"
+              id="output-actions-menu"
+              hidden
+              role="menu"
+              aria-label="Opções do diagrama"
+            >
+              <div class="output-actions">
           <button
             type="button"
             id="btn-zoom-mode"
@@ -770,6 +795,9 @@ flowchart TB
             </svg>
             <span class="btn-label">Baixar Excalidraw</span>
           </button>
+              </div>
+            </div>
+          </div>
         </div>
         <section
           class="output-source"
