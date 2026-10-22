@@ -85,8 +85,9 @@ flowchart TB
             <li>
               Escreva ou cole <strong>Mermaid</strong>, <strong>PlantUML</strong> ou
               <strong>LaTeX</strong> no editor. O seletor ao lado de “Código” define
-              <code>lang=mermaid</code>, <code>lang=puml</code> ou
-              <code>lang=latex</code> na URL (sem <code>lang</code>, o padrão é
+              <code>lang=mermaid</code>, <code>lang=puml</code>,
+              <code>lang=latex</code> ou <code>lang=json</code> na URL (sem
+              <code>lang</code>, o padrão é
               Mermaid).
             </li>
             <li>
@@ -132,6 +133,18 @@ flowchart TB
           </button>
         </header>
         <div class="preview-settings-dialog-body">
+          <label
+            id="json-view-mode-field"
+            class="theme-select theme-select-block"
+            for="sel-json-view-mode"
+            hidden
+          >
+            Visualização JSON
+            <select id="sel-json-view-mode" aria-label="Modo de visualização JSON">
+              <option value="beautify" selected>Beautify (colapsável)</option>
+              <option value="tree">Árvore visual</option>
+            </select>
+          </label>
           <label class="theme-select theme-select-block" for="sel-theme">
             Tema do diagrama
             <select id="sel-theme" aria-label="Tema do diagrama">
@@ -423,6 +436,7 @@ flowchart TB
                 <option value="mermaid" selected>Mermaid</option>
                 <option value="puml">PlantUML</option>
                 <option value="latex">LaTeX</option>
+                <option value="json">JSON</option>
               </select>
             </label>
             <div class="title-field">
@@ -823,6 +837,6 @@ flowchart TB
       decodificar uma URL de diagrama (Mermaid ou PlantUML).
     </a>
 
-    <script type="module" src="./js/app.js?v=20260821f"></script>
+    <script type="module" src="./js/app.js?v=20261021b"></script>
   </body>
 </html>

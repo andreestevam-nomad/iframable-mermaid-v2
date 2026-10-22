@@ -126,6 +126,63 @@ const mermaidHighlight = HighlightStyle.define([
   { tag: t.punctuation, color: "#5c6b7a" },
 ]);
 
+const jsonLanguage = StreamLanguage.define({
+  name: "json",
+  startState() {
+    return { inString: false, escape: false };
+  },
+  token(stream, state) {
+    if (state.inString) {
+      if (state.escape) {
+        state.escape = false;
+        stream.next();
+        return "string";
+      }
+      const ch = stream.next();
+      if (ch === "\\") {
+        state.escape = true;
+        return "string";
+      }
+      if (ch === '"') {
+        state.inString = false;
+        return "string";
+      }
+      return "string";
+    }
+    if (stream.match(/"(?:[^"\\]|\\.)*"/u)) {
+      return "string";
+    }
+    if (stream.match(/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/u)) {
+      return "number";
+    }
+    if (stream.match(/\b(?:true|false|null)\b/u)) {
+      return "keyword";
+    }
+    if (stream.match(/[{}\[\]:,]/u)) {
+      return "bracket";
+    }
+    stream.next();
+    return null;
+  },
+});
+
+const jsonHighlight = HighlightStyle.define([
+  { tag: t.string, color: "#9a5b00" },
+  { tag: t.number, color: "#1a4a7a" },
+  { tag: t.keyword, color: "#0b6e4f", fontWeight: "600" },
+  { tag: t.bracket, color: "#5c6b7a" },
+]);
+
+/**
+ * @param {"mermaid" | "json"} dialect
+ */
+function languageExtensionsForDialect(dialect) {
+  if (dialect === "json") {
+    return [jsonLanguage, syntaxHighlighting(jsonHighlight)];
+  }
+  return [mermaidLanguage, syntaxHighlighting(mermaidHighlight)];
+}
+
 const editorTheme = EditorView.theme({
   "&": {
     height: "100%",
@@ -232,9 +289,17 @@ export function createMermaidSourceViewer({ parent, doc = "" }) {
  * @param {string} [options.doc]
  * @param {(value: string) => void} [options.onChange]
  * @param {(code: string) => Promise<{ ok: boolean, error?: string }>} [options.parse]
+ * @param {"mermaid" | "json"} [options.dialect]
  */
-export function createMermaidEditor({ parent, doc = "", onChange, parse }) {
+export function createMermaidEditor({
+  parent,
+  doc = "",
+  onChange,
+  parse,
+  dialect = "mermaid",
+}) {
   let suppressChange = false;
+  const langExtensions = languageExtensionsForDialect(dialect);
 
   const lintExtension = linter(
     async (view) => {
@@ -248,7 +313,9 @@ export function createMermaidEditor({ parent, doc = "", onChange, parse }) {
             from: 0,
             to: code.length,
             severity: "error",
-            message: result?.error || "Diagrama Mermaid inválido.",
+            message:
+              result?.error ||
+              (dialect === "json" ? "JSON inválido." : "Diagrama Mermaid inválido."),
           },
         ];
       } catch (error) {
@@ -273,8 +340,7 @@ export function createMermaidEditor({ parent, doc = "", onChange, parse }) {
         basicSetup,
         keymap.of([indentWithTab]),
         indentUnit.of("    "),
-        mermaidLanguage,
-        syntaxHighlighting(mermaidHighlight),
+        ...langExtensions,
         editorTheme,
         EditorView.lineWrapping,
         lintGutter(),
@@ -288,6 +354,7 @@ export function createMermaidEditor({ parent, doc = "", onChange, parse }) {
   });
 
   return {
+    dialect,
     getValue() {
       return view.state.doc.toString();
     },

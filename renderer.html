@@ -9,6 +9,7 @@
       href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
     />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./css/json-viewer.css" />
     <style>
       html,
       body {
@@ -16,6 +17,15 @@
         padding: 0;
         width: 100%;
         background: #fff;
+      }
+      html.json-active,
+      html.json-active body {
+        background: #12151c;
+        min-height: 100%;
+      }
+      html.json-active #root {
+        min-height: calc(100vh - 1rem);
+        box-sizing: border-box;
       }
       html.mode-scroll,
       html.mode-scroll body {
@@ -341,6 +351,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@plantuml/core@1.2026.6/emoji.js"></script>
     <script type="module">
       import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.16.0/+esm";
+      import { renderJsonToRoot, parseJsonDocument } from "./js/json-viewer.js";
+      import { normalizeJsonViewMode } from "./js/json-view-mode.js";
 
       /* __RENDERER_BUNDLE_START__ */
 // Bundled renderer helpers (inlined em renderer.html para GitHub Pages).
@@ -1996,6 +2008,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
           .toLowerCase();
         if (raw === "puml" || raw === "plantuml") return "puml";
         if (raw === "latex" || raw === "tex") return "latex";
+        if (raw === "json") return "json";
         return "mermaid";
       }
 
@@ -2790,6 +2803,106 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         }
       }
 
+      async function renderJsonDiagram(
+        rawCode,
+        requestId,
+        expand,
+        view = null,
+        jsonViewMode = "beautify",
+      ) {
+        const nextView = normalizeView(view);
+        if (requestId !== latestRequestId) {
+          post({ type: "render-result", requestId, ok: true, skipped: true });
+          return;
+        }
+
+        if (nextView) preferredView = nextView;
+        setMode(expand);
+        destroyD3Renderer();
+        root.replaceChildren();
+        clearMermaidArtifacts();
+        document.documentElement.classList.add("json-active");
+
+        const code = String(rawCode ?? "");
+        if (!code.trim()) {
+          root.innerHTML = '<p class="hint">O preview aparece aqui.</p>';
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+          return;
+        }
+
+        const parsed = parseJsonDocument(code);
+        if (!parsed.ok) {
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          root.innerHTML = "";
+          const err = document.createElement("div");
+          err.className = "error";
+          err.textContent = parsed.error || "JSON inválido.";
+          root.appendChild(err);
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: false,
+            error: parsed.error || "JSON inválido.",
+            height: measureHeight(),
+            expand: expandMode,
+          });
+          return;
+        }
+
+        try {
+          await renderJsonToRoot(root, parsed.value, {
+            mode: normalizeJsonViewMode(jsonViewMode),
+            raw: code,
+          });
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          clearMermaidArtifacts();
+          await waitForLayout();
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: true,
+            height: measureHeight(),
+            expand: expandMode,
+            renderer: "json",
+          });
+        } catch (error) {
+          const message = error?.message || String(error);
+          if (requestId !== latestRequestId) {
+            post({ type: "render-result", requestId, ok: true, skipped: true });
+            return;
+          }
+          root.innerHTML = "";
+          const err = document.createElement("div");
+          err.className = "error";
+          err.textContent = message;
+          root.appendChild(err);
+          await waitForLayout();
+          post({
+            type: "render-result",
+            requestId,
+            ok: false,
+            error: message,
+            height: measureHeight(),
+            expand: expandMode,
+          });
+        }
+      }
+
       async function renderDiagram(
         rawCode,
         requestId,
@@ -2799,14 +2912,26 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
         useD3 = false,
         d3Config = null,
         lang = "mermaid",
+        jsonViewMode = "beautify",
       ) {
         const normalizedLang = normalizeDiagramLang(lang);
+        document.documentElement.classList.remove("json-active");
         if (normalizedLang === "puml") {
           return renderPlantumlDiagram(rawCode, requestId, expand, view, theme);
         }
 
         if (normalizedLang === "latex") {
           return renderLatexDiagram(rawCode, requestId, expand, view, theme);
+        }
+
+        if (normalizedLang === "json") {
+          return renderJsonDiagram(
+            rawCode,
+            requestId,
+            expand,
+            view,
+            jsonViewMode,
+          );
         }
 
         if (useD3) {
@@ -3139,6 +3264,25 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
                   post({ type: "parse-result", requestId, ok: true });
                   return;
                 }
+                if (parsedLang === "json") {
+                  const text = String(code ?? "").trim();
+                  if (!text) {
+                    post({ type: "parse-result", requestId, ok: true });
+                    return;
+                  }
+                  const parsed = parseJsonDocument(code);
+                  if (!parsed.ok) {
+                    post({
+                      type: "parse-result",
+                      requestId,
+                      ok: false,
+                      error: parsed.error || "JSON inválido.",
+                    });
+                    return;
+                  }
+                  post({ type: "parse-result", requestId, ok: true });
+                  return;
+                }
                 const prepared = prepareMermaidCode(code);
                 if (!prepared || !String(prepared).trim()) {
                   post({ type: "parse-result", requestId, ok: true });
@@ -3160,7 +3304,17 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
 
         if (data.type !== "render") return;
 
-        const { code, requestId, expand, view, theme, useD3, d3Config, lang } = data;
+        const {
+          code,
+          requestId,
+          expand,
+          view,
+          theme,
+          useD3,
+          d3Config,
+          lang,
+          jsonViewMode,
+        } = data;
         latestRequestId = requestId;
         chain = chain
           .catch(() => {})
@@ -3174,6 +3328,7 @@ async function createD3ForceRenderer(root, code, configPartial, options = {}) {
               Boolean(useD3),
               d3Config,
               lang,
+              jsonViewMode,
             ),
           );
       }

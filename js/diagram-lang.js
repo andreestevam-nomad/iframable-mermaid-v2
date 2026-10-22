@@ -1,18 +1,20 @@
 /**
- * Dialetos de diagrama suportados (Mermaid, PlantUML, LaTeX).
+ * Dialetos de diagrama suportados (Mermaid, PlantUML, LaTeX, JSON).
  */
 
-/** Query param do dialeto (`lang=mermaid` | `lang=puml` | `lang=latex`). */
+/** Query param do dialeto (`lang=mermaid` | `lang=puml` | `lang=latex` | `lang=json`). */
 export const LANG_PARAM = "lang";
 
 export const DIAGRAM_LANG_MERMAID = "mermaid";
 export const DIAGRAM_LANG_PLANTUML = "puml";
 export const DIAGRAM_LANG_LATEX = "latex";
+export const DIAGRAM_LANG_JSON = "json";
 
 export const DEFAULT_DIAGRAM_LANG = DIAGRAM_LANG_MERMAID;
 
 const PLANTUML_ALIASES = new Set(["puml", "plantuml"]);
 const LATEX_ALIASES = new Set(["latex", "tex"]);
+const JSON_ALIASES = new Set(["json"]);
 
 /** Linha que inicia com `@startuml`, `@startgantt`, etc. */
 const PLANTUML_LINE_START_RE =
@@ -26,7 +28,7 @@ const LATEX_ALIGN_END = "\\end{align}";
 
 /**
  * @param {unknown} value
- * @returns {"mermaid" | "puml" | "latex"}
+ * @returns {"mermaid" | "puml" | "latex" | "json"}
  */
 export function normalizeDiagramLang(value) {
   const raw = String(value ?? "")
@@ -34,6 +36,7 @@ export function normalizeDiagramLang(value) {
     .toLowerCase();
   if (PLANTUML_ALIASES.has(raw)) return DIAGRAM_LANG_PLANTUML;
   if (LATEX_ALIASES.has(raw)) return DIAGRAM_LANG_LATEX;
+  if (JSON_ALIASES.has(raw)) return DIAGRAM_LANG_JSON;
   return DIAGRAM_LANG_MERMAID;
 }
 
@@ -62,6 +65,14 @@ export function isMermaidLang(lang) {
 }
 
 /**
+ * @param {unknown} lang
+ * @returns {boolean}
+ */
+export function isJsonLang(lang) {
+  return normalizeDiagramLang(lang) === DIAGRAM_LANG_JSON;
+}
+
+/**
  * @param {unknown} code
  * @returns {boolean}
  */
@@ -74,6 +85,29 @@ export function looksLikePlantUmlCode(code) {
     if (lineStartRe.test(line)) return true;
   }
   return false;
+}
+
+/**
+ * @param {unknown} code
+ * @returns {boolean}
+ */
+/**
+ * @param {unknown} code
+ * @returns {boolean}
+ */
+export function looksLikeJsonCode(code) {
+  const trimmed = String(code ?? "")
+    .replace(/^\uFEFF/u, "")
+    .trim();
+  if (!trimmed) return false;
+  const first = trimmed[0];
+  if (first !== "{" && first !== "[") return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -97,10 +131,18 @@ export function looksLikeLatexCode(code) {
  * Prioriza marcadores no código; senão usa o dialeto explícito.
  * @param {unknown} code
  * @param {unknown} explicitLang
- * @returns {"mermaid" | "puml" | "latex"}
+ * @returns {"mermaid" | "puml" | "latex" | "json"}
  */
 export function resolveDiagramLang(code, explicitLang) {
   const explicit = normalizeDiagramLang(explicitLang);
+
+  if (isJsonLang(explicit)) {
+    if (looksLikePlantUmlCode(code)) return DIAGRAM_LANG_PLANTUML;
+    if (looksLikeLatexCode(code) && !looksLikePlantUmlCode(code)) {
+      return DIAGRAM_LANG_LATEX;
+    }
+    return DIAGRAM_LANG_JSON;
+  }
 
   if (isLatexLang(explicit)) {
     if (looksLikePlantUmlCode(code)) return DIAGRAM_LANG_PLANTUML;
@@ -116,12 +158,13 @@ export function resolveDiagramLang(code, explicitLang) {
 
   if (looksLikePlantUmlCode(code)) return DIAGRAM_LANG_PLANTUML;
   if (looksLikeLatexCode(code)) return DIAGRAM_LANG_LATEX;
+  if (looksLikeJsonCode(code)) return DIAGRAM_LANG_JSON;
   return DIAGRAM_LANG_MERMAID;
 }
 
 /**
  * @param {URLSearchParams} [params]
- * @returns {"mermaid" | "puml" | "latex"}
+ * @returns {"mermaid" | "puml" | "latex" | "json"}
  */
 export function parseLangParam(params = new URLSearchParams()) {
   const raw = params.get(LANG_PARAM);
@@ -136,6 +179,7 @@ export function parseLangParam(params = new URLSearchParams()) {
 export function sourceFileExtension(lang) {
   if (isPlantUmlLang(lang)) return "puml";
   if (isLatexLang(lang)) return "tex";
+  if (isJsonLang(lang)) return "json";
   return "mmd";
 }
 
@@ -146,6 +190,7 @@ export function sourceFileExtension(lang) {
 export function diagramTypeLabel(lang) {
   if (isPlantUmlLang(lang)) return "PlantUML";
   if (isLatexLang(lang)) return "LaTeX";
+  if (isJsonLang(lang)) return "JSON";
   return "Mermaid";
 }
 
@@ -156,6 +201,7 @@ export function diagramTypeLabel(lang) {
 export function sourceDownloadLabel(lang) {
   if (isPlantUmlLang(lang)) return "Baixar .puml";
   if (isLatexLang(lang)) return "Baixar .tex";
+  if (isJsonLang(lang)) return "Baixar .json";
   return "Baixar .mmd";
 }
 

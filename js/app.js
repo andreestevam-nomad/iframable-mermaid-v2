@@ -14,37 +14,50 @@ import {
 import { bindD3ConfigDialog } from "./d3-config-dialog.js";
 import {
   DEFAULT_DIAGRAM_LANG,
+  DIAGRAM_LANG_JSON,
   DIAGRAM_LANG_LATEX,
   DIAGRAM_LANG_PLANTUML,
   LANG_PARAM,
   diagramTypeLabel,
+  isJsonLang,
   isLatexLang,
   isMermaidLang,
   isPlantUmlLang,
   normalizeDiagramLang,
   parseLangParam,
   resolveDiagramLang,
+  looksLikeJsonCode,
   looksLikeLatexCode,
   looksLikePlantUmlCode,
   sourceDownloadLabel,
   sourceToggleLabel,
   sourceFileExtension,
   wrapLatexAlignEnvironment,
-} from "./diagram-lang.js";
-import { createMermaidEditor, createMermaidSourceViewer } from "./editor.js";
+} from "./diagram-lang.js?v=20261021b";
+import { createMermaidEditor, createMermaidSourceViewer } from "./editor.js?v=20261021b";
+import {
+  DEFAULT_JSON_VIEW_MODE,
+  JSON_VIEW_MODE_PARAM,
+  normalizeJsonViewMode,
+  parseJsonViewModeParam,
+} from "./json-view-mode.js?v=20261021b";
 import { log } from "./log.js";
 
 const DRAFT_KEY = "mermaid-draft";
 const TITLE_KEY = "mermaid-title";
 const LANG_KEY = "diagram-lang";
+const JSON_VIEW_KEY = "json-view-mode";
 const AUTO_KEY = "mermaid-auto";
 const AUTO_DEBOUNCE_MIN_MS = 500;
 const AUTO_DEBOUNCE_MAX_MS = 1600;
 const URL_DISPLAY_MAX = 160;
-const RENDER_TIMEOUT_MS = 30000;
+const RENDER_TIMEOUT_MS = 90_000;
+const PARSE_TIMEOUT_MS = 45_000;
+const RENDER_MAX_ATTEMPTS = 4;
+const RENDER_RETRY_BASE_DELAY_MS = 1_200;
 const BOOT_AUTO_MAX_CHARS = 3000;
 /** Versão do bundle renderer (bump ao alterar renderer.html). */
-const RENDERER_BUILD = "20260821e";
+const RENDERER_BUILD = "20261021e";
 const RENDERER_SRC = `${new URL("../renderer.html", import.meta.url).href}?v=${RENDERER_BUILD}`;
 const MERMAID_TO_EXCALIDRAW_SRC =
   "https://esm.sh/@excalidraw/mermaid-to-excalidraw@1.1.4";
@@ -154,6 +167,11 @@ const els = {
   helpDialog: document.getElementById("help-dialog"),
   selTheme: document.getElementById("sel-theme"),
   selDiagramLang: document.getElementById("sel-diagram-lang"),
+  jsonViewModeField: document.getElementById("json-view-mode-field"),
+  selJsonViewMode: document.getElementById("sel-json-view-mode"),
+  themeSelectBlock: document.querySelector(
+    "#preview-settings-dialog .theme-select-block",
+  ),
 };
 
 /** @type {ReturnType<typeof createMermaidEditor> | null} */
@@ -172,6 +190,7 @@ let cachedShareOnly = false;
 let cachedShareD3 = false;
 let cachedShareD3ConfigKey = "";
 let cachedShareLang = DEFAULT_DIAGRAM_LANG;
+let cachedShareJsonViewMode = DEFAULT_JSON_VIEW_MODE;
 let cachedShareViewKey = "";
 let urlEpoch = -1;
 let urlBusy = false;
@@ -190,8 +209,10 @@ let zoomModeEnabled = false;
 let zoomView = null;
 /** Tema Mermaid ativo (default: neutral). */
 let diagramTheme = DEFAULT_THEME;
-/** Dialeto do editor (`mermaid` | `puml`). */
+/** Dialeto do editor (`mermaid` | `puml` | `latex` | `json`). */
 let diagramLang = DEFAULT_DIAGRAM_LANG;
+/** Modo de visualização JSON (`beautify` | `tree`). */
+let jsonViewMode = DEFAULT_JSON_VIEW_MODE;
 /** Painel de código expandido na view compartilhada (`?mmd=show|hide`). */
 let sourceExpanded = false;
 /** Preferências do editor que entram na URL compartilhada. */
@@ -546,6 +567,7 @@ function buildShareUrl(
     only = false,
     d3 = false,
     d3ConfigParam = "",
+    jsonView = jsonViewMode,
   } = {},
 ) {
   const url = getShareBaseUrl();
@@ -563,7 +585,13 @@ function buildShareUrl(
   }
   const nextLang = normalizeDiagramLang(lang);
   if (nextLang !== DEFAULT_DIAGRAM_LANG) {
-    url.searchParams.set(LANG_PARAM, DIAGRAM_LANG_PLANTUML);
+    url.searchParams.set(LANG_PARAM, nextLang);
+  }
+  if (isJsonLang(nextLang)) {
+    const nextJsonView = normalizeJsonViewMode(jsonView);
+    if (nextJsonView !== DEFAULT_JSON_VIEW_MODE) {
+      url.searchParams.set(JSON_VIEW_MODE_PARAM, nextJsonView);
+    }
   }
   // Padrão desligado: só inclui z=1 quando o link deve abrir com zoom.
   if (zoom) {
@@ -627,14 +655,85 @@ function syncDiagramLangUi() {
     );
   }
   const mermaidOnly = isMermaidLang(diagramLang);
+  const jsonLang = isJsonLang(diagramLang);
   if (els.btnStripComments) els.btnStripComments.hidden = !mermaidOnly;
-  if (els.btnFormat) els.btnFormat.hidden = !mermaidOnly;
-  if (els.btnMinify) els.btnMinify.hidden = !mermaidOnly;
+  if (els.btnFormat) els.btnFormat.hidden = !(mermaidOnly || jsonLang);
+  if (els.btnMinify) els.btnMinify.hidden = !(mermaidOnly || jsonLang);
   if (els.btnExportPreviewExcalidraw) {
     els.btnExportPreviewExcalidraw.hidden = !mermaidOnly;
   }
+  if (els.themeSelectBlock) {
+    els.themeSelectBlock.hidden = jsonLang;
+  }
+  syncJsonViewModeUi();
   syncD3ControlsVisibility();
   syncExportSourceButtons();
+}
+
+function persistJsonViewMode() {
+  try {
+    sessionStorage.setItem(JSON_VIEW_KEY, normalizeJsonViewMode(jsonViewMode));
+  } catch {
+    // ignore
+  }
+}
+
+function restoreJsonViewMode() {
+  try {
+    const stored = sessionStorage.getItem(JSON_VIEW_KEY);
+    if (stored) jsonViewMode = normalizeJsonViewMode(stored);
+  } catch {
+    // ignore
+  }
+}
+
+function syncJsonViewModeUi() {
+  const show = isJsonLang(diagramLang);
+  if (els.jsonViewModeField) els.jsonViewModeField.hidden = !show;
+  if (els.selJsonViewMode) {
+    els.selJsonViewMode.value = normalizeJsonViewMode(jsonViewMode);
+  }
+}
+
+function editorDialectForLang(lang = diagramLang) {
+  return isJsonLang(lang) ? "json" : "mermaid";
+}
+
+function formatJsonCode(code) {
+  return `${JSON.stringify(JSON.parse(code), null, 2)}\n`;
+}
+
+function minifyJsonCode(code) {
+  return JSON.stringify(JSON.parse(code));
+}
+
+async function parseEditorCode(code) {
+  try {
+    await parseInPreview(code);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+function createEditorInstance(doc = "") {
+  return createMermaidEditor({
+    parent: els.editorHost,
+    doc,
+    dialect: editorDialectForLang(),
+    onChange: () => {
+      onEditorContentChanged();
+    },
+    parse: parseEditorCode,
+  });
+}
+
+function ensureEditorDialect() {
+  const dialect = editorDialectForLang();
+  if (editor?.dialect === dialect) return;
+  const code = editor ? getEditorValue() : "";
+  editor?.destroy();
+  editor = createEditorInstance(code);
 }
 
 function persistDiagramLang() {
@@ -656,10 +755,15 @@ function applyLatexAlignWrapToEditorIfNeeded() {
 }
 
 function maybeSyncDiagramLangFromCode(code) {
+  // Só infere dialeto a partir do código no modo Mermaid padrão; não sobrescreve
+  // PlantUML, LaTeX ou JSON escolhidos manualmente no seletor.
+  if (!isMermaidLang(diagramLang)) return;
+
   if (looksLikePlantUmlCode(code) && !isPlantUmlLang(diagramLang)) {
     diagramLang = DIAGRAM_LANG_PLANTUML;
     persistDiagramLang();
     syncDiagramLangUi();
+    ensureEditorDialect();
     return;
   }
   if (
@@ -670,18 +774,47 @@ function maybeSyncDiagramLangFromCode(code) {
     diagramLang = DIAGRAM_LANG_LATEX;
     persistDiagramLang();
     syncDiagramLangUi();
+    ensureEditorDialect();
     applyLatexAlignWrapToEditorIfNeeded();
+    return;
+  }
+  if (
+    looksLikeJsonCode(code) &&
+    !isPlantUmlLang(diagramLang) &&
+    !isLatexLang(diagramLang) &&
+    !isJsonLang(diagramLang)
+  ) {
+    diagramLang = DIAGRAM_LANG_JSON;
+    persistDiagramLang();
+    syncDiagramLangUi();
+    ensureEditorDialect();
   }
 }
 
 function onDiagramLangChanged() {
   const prevLang = diagramLang;
-  diagramLang = normalizeDiagramLang(els.selDiagramLang?.value);
+  const selected =
+    els.selDiagramLang?.selectedOptions?.[0]?.value ??
+    els.selDiagramLang?.value;
+  diagramLang = normalizeDiagramLang(selected);
   persistDiagramLang();
   syncDiagramLangUi();
+  ensureEditorDialect();
   if (isLatexLang(diagramLang) && !isLatexLang(prevLang)) {
     applyLatexAlignWrapToEditorIfNeeded();
   }
+  invalidateUrlPreview();
+  if (editorHasCode()) {
+    void renderPreview(getEditorValue());
+  }
+  if (isAutoEnabled() && editorHasCode()) {
+    void refreshUrlPreview({ quiet: true });
+  }
+}
+
+function onJsonViewModeChanged() {
+  jsonViewMode = normalizeJsonViewMode(els.selJsonViewMode?.value);
+  persistJsonViewMode();
   invalidateUrlPreview();
   if (editorHasCode()) {
     void renderPreview(getEditorValue());
@@ -1087,6 +1220,7 @@ async function renderInFrame(
     lang = diagramLang,
     useD3 = false,
     d3Config: nextD3Config = d3Config,
+    jsonView = jsonViewMode,
   } = {},
 ) {
   await ensureRenderer(iframe);
@@ -1095,6 +1229,7 @@ async function renderInFrame(
   const nextTheme = normalizeTheme(theme);
   const nextLang = normalizeDiagramLang(lang);
   const d3Enabled = Boolean(useD3) && isMermaidLang(nextLang);
+  const nextJsonView = normalizeJsonViewMode(jsonView);
 
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -1130,6 +1265,7 @@ async function renderInFrame(
         lang: nextLang,
         useD3: d3Enabled,
         d3Config: d3Enabled ? normalizeD3Config(nextD3Config) : null,
+        jsonViewMode: isJsonLang(nextLang) ? nextJsonView : undefined,
       });
     } catch (error) {
       window.clearTimeout(timer);
@@ -1137,6 +1273,43 @@ async function renderInFrame(
       reject(error);
     }
   });
+}
+
+function isRenderTimeoutError(error) {
+  const message = String(error?.message || error || "");
+  return /timeout/i.test(message);
+}
+
+function renderRetryDelayMs(attemptIndex) {
+  return RENDER_RETRY_BASE_DELAY_MS * attemptIndex;
+}
+
+async function renderInFrameWithRetries(iframe, code, options = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= RENDER_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await renderInFrame(iframe, code, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= RENDER_MAX_ATTEMPTS) break;
+      log("render:retry", {
+        attempt,
+        max: RENDER_MAX_ATTEMPTS,
+        message: error?.message || String(error),
+      });
+      if (isRenderTimeoutError(error)) {
+        try {
+          await reloadRenderer(iframe);
+        } catch {
+          // ignore
+        }
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, renderRetryDelayMs(attempt)),
+      );
+    }
+  }
+  throw lastError;
 }
 
 async function parseInPreview(code) {
@@ -1147,7 +1320,7 @@ async function parseInPreview(code) {
     const timer = window.setTimeout(() => {
       pending.delete(requestId);
       reject(new Error("Timeout ao validar Mermaid."));
-    }, 10000);
+    }, PARSE_TIMEOUT_MS);
 
     pending.set(requestId, {
       resolve,
@@ -1208,7 +1381,9 @@ function sanitizeFilenameBase(title) {
       ? "diagrama-plantuml"
       : isLatexLang(diagramLang)
         ? "diagrama-latex"
-        : "diagrama-mermaid";
+        : isJsonLang(diagramLang)
+          ? "dados-json"
+          : "diagrama-mermaid";
   }
   return (
     clean
@@ -1463,7 +1638,7 @@ async function renderPreview(code) {
 
   try {
     const previewLang = normalizeDiagramLang(diagramLang);
-    await renderInFrame(els.previewFrame, code, {
+    await renderInFrameWithRetries(els.previewFrame, code, {
       expand: isPreviewExpandEnabled(code),
       view: previewZoomView,
       theme: diagramTheme,
@@ -1611,6 +1786,7 @@ function invalidateUrlPreview() {
   cachedShareTitle = "";
   cachedShareTheme = "";
   cachedShareLang = DEFAULT_DIAGRAM_LANG;
+  cachedShareJsonViewMode = DEFAULT_JSON_VIEW_MODE;
   cachedShareZoom = false;
   cachedShareMmd = false;
   cachedShareOnly = false;
@@ -1720,6 +1896,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
       only,
       d3,
       d3ConfigParam,
+      jsonView: jsonViewMode,
     });
     if (seq !== urlSeq) return;
 
@@ -1727,6 +1904,9 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareTitle = title;
     cachedShareTheme = theme;
     cachedShareLang = lang;
+    cachedShareJsonViewMode = isJsonLang(lang)
+      ? normalizeJsonViewMode(jsonViewMode)
+      : DEFAULT_JSON_VIEW_MODE;
     cachedShareZoom = zoom;
     cachedShareMmd = mmd;
     cachedShareOnly = only;
@@ -1749,6 +1929,7 @@ async function refreshUrlPreview({ quiet = false } = {}) {
     cachedShareTitle = "";
     cachedShareTheme = "";
     cachedShareLang = DEFAULT_DIAGRAM_LANG;
+    cachedShareJsonViewMode = DEFAULT_JSON_VIEW_MODE;
     cachedShareZoom = false;
     cachedShareMmd = false;
     cachedShareOnly = false;
@@ -1770,6 +1951,10 @@ async function ensureShareUrl() {
     cachedShareTitle === getDiagramTitle() &&
     cachedShareTheme === diagramTheme &&
     cachedShareLang === diagramLang &&
+    cachedShareJsonViewMode ===
+      (isJsonLang(diagramLang)
+        ? normalizeJsonViewMode(jsonViewMode)
+        : DEFAULT_JSON_VIEW_MODE) &&
     cachedShareZoom === previewZoomEnabled &&
     cachedShareMmd === shareShowMmd &&
     cachedShareOnly === shareOnlyDiagram &&
@@ -1864,7 +2049,9 @@ async function goToEditor(code, title = "") {
   d3ForceEnabled = parseD3Param(params);
   shareD3Force = d3ForceEnabled;
   diagramLang = parseLangParam(params);
+  jsonViewMode = parseJsonViewModeParam(params);
   persistDiagramLang();
+  persistJsonViewMode();
   const d3ConfigParam = params.get(D3_CONFIG_PARAM);
   if (d3ConfigParam) {
     d3Config = await decompressD3Config(d3ConfigParam);
@@ -2074,6 +2261,10 @@ async function bootOutput(param, title = "", outputOptions = {}) {
     outputOptions.lang != null
       ? normalizeDiagramLang(outputOptions.lang)
       : parseLangParam(new URLSearchParams(window.location.search));
+  jsonViewMode =
+    outputOptions.jsonView != null
+      ? normalizeJsonViewMode(outputOptions.jsonView)
+      : parseJsonViewModeParam(new URLSearchParams(window.location.search));
   if (els.btnExportOutputExcalidraw) {
     els.btnExportOutputExcalidraw.hidden = !isMermaidLang(diagramLang);
   }
@@ -2109,13 +2300,14 @@ async function bootOutput(param, title = "", outputOptions = {}) {
       syncZoomQueryParam();
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await renderInFrame(els.outputFrame, code, {
+    await renderInFrameWithRetries(els.outputFrame, code, {
       expand: d3Compatible || zoomModeEnabled,
       view: zoomView,
       theme: diagramTheme,
       lang: diagramLang,
       useD3: d3Compatible,
       d3Config: outputD3Config,
+      jsonView: jsonViewMode,
     });
     showOutputSource(code);
     setStatus("", "muted");
@@ -2174,6 +2366,8 @@ async function bootOutput(param, title = "", outputOptions = {}) {
         bootOutput(param, title, {
           useD3,
           d3Config: outputD3Config,
+          lang: diagramLang,
+          jsonView: jsonViewMode,
         }),
     );
     setStatus("Falha ao carregar diagrama.", "error");
@@ -2205,6 +2399,7 @@ async function bootInput(initialCode, initialTitle) {
 
   const draft = initialCode ?? sessionStorage.getItem(DRAFT_KEY) ?? "";
   restoreAutoPreference();
+  restoreJsonViewMode();
   restoreTitle(initialTitle);
   try {
     // Só restaura sessionStorage no fluxo do editor (draft); links ?d= já definem lang.
@@ -2224,20 +2419,7 @@ async function bootInput(initialCode, initialTitle) {
   d3ConfigUi?.setConfig(d3Config);
 
   if (!editor) {
-    editor = createMermaidEditor({
-      parent: els.editorHost,
-      doc: draft,
-      onChange: () => {
-        onEditorContentChanged();
-      },
-      parse: async (code) => {
-        try {
-          return await parseInPreview(code);
-        } catch (error) {
-          return { ok: false, error: error?.message || String(error) };
-        }
-      },
-    });
+    editor = createEditorInstance(draft);
   } else if (initialCode != null) {
     editor.setValue(initialCode);
   } else if (draft && !getEditorValue()) {
@@ -2249,6 +2431,7 @@ async function bootInput(initialCode, initialTitle) {
     applyLatexAlignWrapToEditorIfNeeded();
   }
   syncDiagramLangUi();
+  ensureEditorDialect();
   syncExportSourceButtons();
 
   if (!inputBound) {
@@ -2265,6 +2448,10 @@ async function bootInput(initialCode, initialTitle) {
 
     els.selDiagramLang?.addEventListener("change", () => {
       onDiagramLangChanged();
+    });
+
+    els.selJsonViewMode?.addEventListener("change", () => {
+      onJsonViewModeChanged();
     });
 
     els.chkZoomPreview?.addEventListener("change", () => {
@@ -2321,9 +2508,17 @@ async function bootInput(initialCode, initialTitle) {
       applyEditorTransform(removeComments, "Comentários removidos");
     });
     els.btnFormat?.addEventListener("click", () => {
+      if (isJsonLang(diagramLang)) {
+        applyEditorTransform(formatJsonCode, "JSON formatado");
+        return;
+      }
       applyEditorTransform(formatMermaid, "Código formatado");
     });
     els.btnMinify?.addEventListener("click", () => {
+      if (isJsonLang(diagramLang)) {
+        applyEditorTransform(minifyJsonCode, "JSON minificado");
+        return;
+      }
       applyEditorTransform(minifyMermaid, "Código minificado");
     });
     els.btnExportPreviewPng?.addEventListener("click", () => {
@@ -2414,6 +2609,7 @@ async function boot() {
       useD3: outputUseD3,
       d3ConfigParam: outputD3ConfigParam,
       lang: parseLangParam(params),
+      jsonView: parseJsonViewModeParam(params),
     });
   } else {
     await bootInput();
