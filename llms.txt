@@ -18,10 +18,10 @@ servidor, banco de dados ou storage externo — todo o estado vive na URL.
   parâmetro `d`.
   - **Sem `d`**: modo edição — editor CodeMirror (`js/editor.js`) + preview.
   - **Com `d`**: modo visualização — decodifica `d`, renderiza o diagrama.
-- `renderer.html` — carregado dentro de um `<iframe sandbox="allow-scripts allow-same-origin">`
+- `renderer.html` — carregado dentro de um `<iframe sandbox="allow-scripts">`
   (tanto no preview do editor quanto na visualização). Importa `mermaid` via
-  CDN e módulos locais (`js/d3-force-renderer.js`, etc.). O iframe usa
-  `sandbox="allow-scripts allow-same-origin"` para permitir imports locais.
+  CDN; helpers locais (D3, JSON viewer, etc.) ficam inlined no HTML pelo script
+  `scripts/inline-renderer-bundle.js` (deploy e após alterar esses módulos).
   Comunicação com a página principal via `postMessage`
   (`render`, `parse`, `export-png`, `set-zoom-mode`, `set-view`, etc.).
   Quando `useD3` está ativo, usa `js/d3-force-renderer.js` (D3 v7) em vez de

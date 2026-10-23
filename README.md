@@ -16,7 +16,12 @@ No editor, o preview também tem **Modo zoom** e o checkbox **Mostrar código mm
 python3 -m http.server 8080
 ```
 
-Abra `http://localhost:8080`. As URLs geradas apontam para o site em produção (GitHub Pages), não para localhost.
+Abra `http://localhost:8080` (não abra `index.html` direto por `file://` — módulos ES e o preview no iframe precisam de HTTP).
+
+Se alterar `js/renderer-bundle.source.js`, `js/json-viewer.js` ou `js/json-view-mode.js`, rode
+`node scripts/inline-renderer-bundle.js` para atualizar o `renderer.html` usado no iframe.
+
+As URLs geradas apontam para o site em produção (GitHub Pages), não para localhost.
 
 ## Produção
 

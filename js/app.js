@@ -57,7 +57,7 @@ const RENDER_MAX_ATTEMPTS = 4;
 const RENDER_RETRY_BASE_DELAY_MS = 1_200;
 const BOOT_AUTO_MAX_CHARS = 3000;
 /** Versão do bundle renderer (bump ao alterar renderer.html). */
-const RENDERER_BUILD = "20261021e";
+const RENDERER_BUILD = "20261023b";
 const RENDERER_SRC = `${new URL("../renderer.html", import.meta.url).href}?v=${RENDERER_BUILD}`;
 const MERMAID_TO_EXCALIDRAW_SRC =
   "https://esm.sh/@excalidraw/mermaid-to-excalidraw@1.1.4";
